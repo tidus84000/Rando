@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Montagne + soleil + sentier -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- soleil -->
+    <path
+        android:fillColor="#FFFFC107"
+        android:pathData="M70,36m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+    <!-- montagne arrière -->
+    <path
+        android:fillColor="#FFA5D6A7"
+        android:pathData="M52,74 L68,48 L84,74 Z" />
+    <!-- montagne principale -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M24,74 L46,38 L68,74 Z" />
+    <!-- neige -->
+    <path
+        android:fillColor="#FF2E7D32"
+        android:pathData="M40,48 L46,38 L52,48 L48,46 L46,49 L43,46 Z" />
+    <!-- sentier -->
+    <path
+        android:strokeColor="#FFD84315"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M34,74 C40,68 50,66 46,60 C43,56 52,54 50,50" />
+</vector>
