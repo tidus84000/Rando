@@ -42,7 +42,8 @@ object LinkImporter {
 }
 
 object KomootImporter {
-    private val idRegex = Regex("""/(smart)?tours?/(\d+)""")
+    // ex. /tour/123456, /smarttour/e834133009, /fr-fr/smarttour/123
+    private val idRegex = Regex("""/(smart)?tours?/([a-zA-Z]?\d+)""")
 
     fun import(url: String): Hike {
         var finalUrl = url
@@ -57,21 +58,19 @@ object KomootImporter {
         val shareToken = finalUrl.toHttpUrlOrNull()?.queryParameter("share_token")
             ?: url.toHttpUrlOrNull()?.queryParameter("share_token")
 
-        val api = buildString {
-            append("https://api.komoot.de/v007/")
-            append(if (smart) "smart_tours/" else "tours/")
-            append(id)
-            append("?_embedded=coordinates")
-            if (shareToken != null) append("&share_token=").append(shareToken)
-        }
-        val json = runCatching {
-            Http.get(api, "application/hal+json, application/json").use { r ->
-                if (r.isSuccessful) r.body?.string() else null
+        val kinds = if (smart) listOf("smart_tours", "tours") else listOf("tours", "smart_tours")
+        for (kind in kinds) {
+            val api = buildString {
+                append("https://api.komoot.de/v007/").append(kind).append('/').append(id)
+                append("?_embedded=coordinates")
+                if (shareToken != null) append("&share_token=").append(shareToken)
             }
-        }.getOrNull()
-
-        if (json != null) {
-            val o = JSONObject(json)
+            val json = runCatching {
+                Http.get(api, "application/hal+json, application/json").use { r ->
+                    if (r.isSuccessful) r.body?.string() else null
+                }
+            }.getOrNull() ?: continue
+            val o = runCatching { JSONObject(json) }.getOrNull() ?: continue
             val items = o.optJSONObject("_embedded")?.optJSONObject("coordinates")?.optJSONArray("items")
             if (items != null && items.length() >= 2) {
                 val pts = ArrayList<TrackPoint>(items.length())
@@ -81,6 +80,17 @@ object KomootImporter {
                     pts.add(TrackPoint(c.getDouble("lat"), c.getDouble("lng"), if (alt.isNaN()) null else alt))
                 }
                 val name = o.optString("name").ifBlank { "Rando Komoot $id" }
+                return LinkImporter.newHike(name, "Komoot", finalUrl, pts)
+            }
+        }
+
+        // Plan B : le tracé est inclus dans la page web elle-même
+        val html = Http.getText(finalUrl, "text/html")
+        if (html != null) {
+            val pts = PageScraper.coordinates(html)
+            if (pts.size >= 10) {
+                val name = PageScraper.title(html)?.substringBefore(" | ")?.substringBefore(" - komoot")
+                    ?.trim()?.ifBlank { null } ?: "Rando Komoot $id"
                 return LinkImporter.newHike(name, "Komoot", finalUrl, pts)
             }
         }
@@ -154,6 +164,38 @@ object VisorandoImporter {
             h.startsWith("/") -> "https://www.visorando.com$h"
             else -> "https://www.visorando.com/$h"
         }
+    }
+}
+
+/** Extraction de coordonnées incluses dans le HTML/JSON d'une page (Komoot, etc.). */
+object PageScraper {
+    private val coord = Regex(
+        """\\?"lat\\?"\s*:\s*(-?\d+\.\d+)\s*,\s*\\?"(?:lng|lon)\\?"\s*:\s*(-?\d+\.\d+)(?:\s*,\s*\\?"(?:alt|ele)\\?"\s*:\s*(-?\d+(?:\.\d+)?))?"""
+    )
+
+    fun coordinates(html: String): List<TrackPoint> {
+        // on garde la plus longue suite de points consécutifs (le tracé, pas les points d'intérêt)
+        var best = emptyList<TrackPoint>()
+        var cur = ArrayList<TrackPoint>()
+        var lastEnd = -1
+        for (m in coord.findAll(html)) {
+            if (lastEnd >= 0 && m.range.first - lastEnd > 80) {
+                if (cur.size > best.size) best = cur
+                cur = ArrayList()
+            }
+            cur.add(TrackPoint(m.groupValues[1].toDouble(), m.groupValues[2].toDouble(), m.groupValues[3].toDoubleOrNull()))
+            lastEnd = m.range.last
+        }
+        if (cur.size > best.size) best = cur
+        return best
+    }
+
+    fun title(html: String): String? {
+        val og = Regex("""<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1)
+        val t = og ?: Regex("<title>(.*?)</title>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+            .find(html)?.groupValues?.get(1)
+        return t?.let { Html.fromHtml(it, Html.FROM_HTML_MODE_LEGACY).toString() }
     }
 }
 
