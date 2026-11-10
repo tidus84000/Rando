@@ -63,6 +63,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import fr.tidus.rando.data.Geo
+import fr.tidus.rando.gear.GearAdvisor
+import fr.tidus.rando.gear.GearOptions
+import fr.tidus.rando.gear.GearSection
+import fr.tidus.rando.importers.Geocoding
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.clickable
 import fr.tidus.rando.data.Hike
 import fr.tidus.rando.data.Profile
 import fr.tidus.rando.weather.Level
@@ -115,6 +122,13 @@ fun DetailScreen(hike: Hike, onBack: () -> Unit, onDelete: () -> Unit, onRename:
     var reload by remember { mutableIntStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var startAddress by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(hike.id) {
+        hike.points.firstOrNull()?.let { p -> startAddress = Geocoding.reverse(p.lat, p.lon)?.label }
+    }
+    val prefs = remember { context.getSharedPreferences("rando", android.content.Context.MODE_PRIVATE) }
+    var withDog by remember { mutableStateOf(prefs.getBoolean("gear_dog", false)) }
+    var withChild by remember { mutableStateOf(prefs.getBoolean("gear_child", false)) }
 
     LaunchedEffect(hike.id, date, reload) {
         loading = true
@@ -189,6 +203,22 @@ fun DetailScreen(hike: Hike, onBack: () -> Unit, onDelete: () -> Unit, onRename:
                         ?: start.plusMinutes((stats.durationHours * 60).toLong()).format(RouteWeather.HM),
                 )
             }
+            item {
+                val first = hike.points.firstOrNull()
+                Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Point de départ", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                startAddress ?: first?.let { String.format(Locale.FRANCE, "%.5f, %.5f", it.lat, it.lon) } ?: "—",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Button(onClick = { first?.let { driveTo(context, it.lat, it.lon) } }) { Text("🚗 Y aller") }
+                    }
+                }
+            }
             if (best != null && route != null && best.start != start && best.penalty < route.penalty - 5) {
                 item {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -250,6 +280,20 @@ fun DetailScreen(hike: Hike, onBack: () -> Unit, onDelete: () -> Unit, onRename:
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            item {
+                val sections = remember(stats, route, start, withDog, withChild) {
+                    GearAdvisor.advise(stats, route, start, GearOptions(withDog, withChild))
+                }
+                GearCard(
+                    hikeId = hike.id,
+                    sections = sections,
+                    hasForecast = route != null,
+                    withDog = withDog,
+                    withChild = withChild,
+                    onDog = { withDog = it; prefs.edit().putBoolean("gear_dog", it).apply() },
+                    onChild = { withChild = it; prefs.edit().putBoolean("gear_child", it).apply() },
+                )
             }
         }
     }
@@ -472,6 +516,75 @@ private fun ElevationChart(profile: Profile, weather: List<PointWeather>, modifi
             weather.forEach { w ->
                 drawCircle(levelColor(w.level), radius = 9f, center = Offset(x(w.loc.km), y(w.loc.ele)))
                 drawCircle(Color.White, radius = 9f, center = Offset(x(w.loc.km), y(w.loc.ele)), style = Stroke(2f))
+            }
+        }
+    }
+}
+
+
+private fun driveTo(context: android.content.Context, lat: Double, lon: Double) {
+    val coords = String.format(Locale.US, "%.6f,%.6f", lat, lon)
+    val nav = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=$coords&mode=d"))
+    try {
+        context.startActivity(nav)
+    } catch (e: Exception) {
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:$coords?q=$coords(Départ de la rando)")))
+        }
+    }
+}
+
+@Composable
+private fun GearCard(
+    hikeId: String,
+    sections: List<GearSection>,
+    hasForecast: Boolean,
+    withDog: Boolean,
+    withChild: Boolean,
+    onDog: (Boolean) -> Unit,
+    onChild: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("gear_checks", android.content.Context.MODE_PRIVATE) }
+    var checked by remember(hikeId) { mutableStateOf(prefs.getStringSet(hikeId, emptySet())!!.toSet()) }
+    var expanded by remember { mutableStateOf(true) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
+                Text("🎒 Sac à préparer", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                val total = sections.sumOf { it.items.size }
+                val done = sections.sumOf { s -> s.items.count { it.key in checked } }
+                Text("$done/$total  ${if (expanded) "▲" else "▼"}", style = MaterialTheme.typography.labelLarge)
+            }
+            if (!hasForecast) {
+                Text(
+                    "Sans prévision météo pour ce créneau : conseils basés sur la saison.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (expanded) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = withDog, onClick = { onDog(!withDog) }, label = { Text("🐕 Avec un chien") })
+                    FilterChip(selected = withChild, onClick = { onChild(!withChild) }, label = { Text("👶 Enfant porté") })
+                }
+                sections.filter { it.items.isNotEmpty() }.forEach { sec ->
+                    Text(sec.title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp))
+                    sec.items.forEach { item ->
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
+                            checked = if (item.key in checked) checked - item.key else checked + item.key
+                            prefs.edit().putStringSet(hikeId, checked).apply()
+                        }) {
+                            Checkbox(checked = item.key in checked, onCheckedChange = null)
+                            Column(Modifier.padding(start = 4.dp)) {
+                                Text(item.text, style = MaterialTheme.typography.bodyMedium)
+                                item.why?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

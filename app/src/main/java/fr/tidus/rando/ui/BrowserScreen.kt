@@ -12,6 +12,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,19 +22,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,9 +50,13 @@ import fr.tidus.rando.importers.ElevationService
 import fr.tidus.rando.importers.GpxParser
 import fr.tidus.rando.importers.Http
 import fr.tidus.rando.importers.LinkImporter
+import fr.tidus.rando.importers.PageScraper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONTokener
 
 /**
  * Script injecté dans chaque page : repère le GPX quel que soit le moyen utilisé par le site
@@ -60,14 +67,11 @@ private const val HOOK_JS = """
   if (window.__randoHook) return; window.__randoHook = true;
   function chk(t){ try { if (t && typeof t === 'string' && t.indexOf('<gpx') >= 0) RandoBridge.onGpx(t); } catch(e){} }
   function abs(u){ try { return String(new URL(u, location.href)); } catch(e){ return String(u); } }
-  function isGpx(u){ return /gpx/i.test(String(u)) && !/\.(js|css|png|jpe?g|svg|webp|gif|woff2?)(\?|$)/i.test(String(u)); }
   var of = window.fetch;
-  if (of) window.fetch = function(input){
-    try { var u = (input && input.url) ? input.url : input; if (isGpx(u)) RandoBridge.onUrl(abs(u)); } catch(e){}
+  if (of) window.fetch = function(){
     return of.apply(this, arguments).then(function(r){ try { r.clone().text().then(chk); } catch(e){} return r; });
   };
-  var oo = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function(m, u){ try { if (isGpx(u)) RandoBridge.onUrl(abs(u)); } catch(e){} return oo.apply(this, arguments); };
+  var os = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.send = function(){
     var x = this;
     x.addEventListener('load', function(){
@@ -80,41 +84,90 @@ private const val HOOK_JS = """
   };
   var oc = URL.createObjectURL;
   URL.createObjectURL = function(b){ try { if (b && b.text) b.text().then(chk); } catch(e){} return oc.apply(this, arguments); };
-  var ow = window.open;
-  window.open = function(u){ try { if (u && isGpx(u)) { RandoBridge.onUrl(abs(u)); return null; } } catch(e){} return ow.apply(this, arguments); };
   document.addEventListener('click', function(e){
     try {
       var el = e.target.closest('a,button,[onclick],[data-href],[data-url]');
       if (!el) return;
       var s = (el.textContent || '') + ' ' + (el.getAttribute('href') || '') + ' ' + (el.className || '');
-      if (/gpx/i.test(s)) {
-        RandoBridge.onClickInfo(el.outerHTML.substring(0, 300));
+      if (/gpx|t[ée]l[ée]charg|cliquez/i.test(s)) {
+        RandoBridge.onLog('Bouton : ' + el.outerHTML.substring(0, 160));
         var h = el.getAttribute('data-href') || el.getAttribute('data-url') || el.getAttribute('href');
-        if (h && h !== '#' && h.indexOf('javascript') !== 0) RandoBridge.onUrl(abs(h));
+        if (h && h !== '#' && h.indexOf('javascript') !== 0) RandoBridge.onCandidate(abs(h));
       }
     } catch(err){}
   }, true);
 })();
 """
 
-private val STATIC = Regex("""\.(js|css|png|jpe?g|svg|webp|gif|woff2?|ico)(\?|$)""", RegexOption.IGNORE_CASE)
-private fun looksLikeGpxUrl(u: String) = u.contains("gpx", ignoreCase = true) && !STATIC.containsMatchIn(u)
+/** Sur une page de téléchargement : liste tous les liens qui pourraient mener au fichier. */
+private const val SCAN_JS = """
+(function(){
+  var out = [];
+  function add(u){ try { u = String(new URL(u, location.href)); if (out.indexOf(u) < 0) out.push(u); } catch(e){} }
+  document.querySelectorAll('a[href],iframe[src],[data-href],[data-url]').forEach(function(el){
+    var u = el.getAttribute('href') || el.getAttribute('src') || el.getAttribute('data-href') || el.getAttribute('data-url');
+    var t = (el.textContent || '');
+    if (!u || u === '#' || u.indexOf('javascript') === 0) return;
+    if (/gpx|t[ée]l[ée]charg|download|export|getRando/i.test(u) || /cliquez|t[ée]l[ée]charg/i.test(t)) add(u);
+  });
+  var html = document.documentElement.innerHTML;
+  var re = /["'(]((?:https?:\/\/[^"'()\s]+|\/[^"'()\s]+)(?:gpx|telecharg|download)[^"'()\s]*)["')]/gi, m;
+  while ((m = re.exec(html)) !== null) add(m[1].replace(/&amp;/g, '&'));
+  var meta = document.querySelector('meta[http-equiv="refresh" i]');
+  if (meta) { var c = meta.getAttribute('content') || ''; var i = c.toLowerCase().indexOf('url='); if (i >= 0) add(c.substring(i + 4)); }
+  return JSON.stringify(out.slice(0, 15));
+})();
+"""
+
+private val STATIC = Regex("""\.(js|css|png|jpe?g|svg|webp|gif|woff2?|ico|mp4)(\?|$)""", RegexOption.IGNORE_CASE)
+private val NOISE = Regex("""matomo|analytics|googletag|google-analytics|doubleclick|facebook|sentry|datadome|hotjar|criteo|adservice""", RegexOption.IGNORE_CASE)
+private fun usable(u: String) = u.startsWith("http") && !STATIC.containsMatchIn(u) && !NOISE.containsMatchIn(u)
+private fun mentionsGpx(u: String) = usable(u) && u.contains("gpx", ignoreCase = true)
+private fun isDownloadPage(u: String?) = u != null && Regex("""t[ée]l[ée]charg|download""", RegexOption.IGNORE_CASE).containsMatchIn(u)
+
+/** Page d'une rando sur un des sites pris en charge (pour afficher « Importer cette rando »). */
+fun isHikePage(u: String?): Boolean {
+    if (u == null) return false
+    return Regex("""komoot\.[a-z.]+/(?:[a-z]{2}-[a-z]{2}/)?(?:smart)?tour/""").containsMatchIn(u) ||
+        Regex("""visorando\.com/(?:en/)?(?:randonnee|walk)-[^/]+/?$""").containsMatchIn(u.substringBefore('?')) &&
+        !u.contains(".html") ||
+        Regex("""alltrails\.com/(?:[a-z]{2}/)?(?:trail|explore/trail)/""").containsMatchIn(u)
+}
 
 /**
- * Navigateur intégré : sert à se connecter à Komoot / Visorando quand le tracé n'est pas public.
- * Dès qu'un GPX passe par la page (lien, script, fichier généré, téléchargement), il est importé.
+ * Navigateur intégré : se connecter, chercher des randos sur Komoot / Visorando / AllTrails,
+ * et importer la rando affichée. Tout GPX qui passe par la page est intercepté.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun BrowserScreen(url: String, onBack: () -> Unit, onImported: (Hike) -> Unit) {
+fun BrowserScreen(url: String, autoImport: Boolean, onBack: () -> Unit, onImported: (Hike) -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
-    var diag by remember { mutableStateOf<String?>(null) }
+    val log = remember { mutableStateListOf<String>() }
     var webView by remember { mutableStateOf<WebView?>(null) }
+    var currentUrl by remember { mutableStateOf<String?>(url) }
     val scope = rememberCoroutineScope()
     val main = remember { Handler(Looper.getMainLooper()) }
     val tried = remember { HashSet<String>() }
     var done by remember { mutableStateOf(false) }
+    var autoTried by remember { mutableStateOf(false) }
+
+    fun addLog(s: String) {
+        log.add(0, s.take(180))
+        while (log.size > 4) log.removeAt(log.size - 1)
+    }
+
+    fun sourceOf(u: String?) = when {
+        u == null -> "GPX"
+        "komoot" in u -> "Komoot"
+        "visorando" in u -> "Visorando"
+        "alltrails" in u -> "AllTrails"
+        else -> "GPX"
+    }
+
+    fun pageName(): String? = webView?.title
+        ?.substringBefore(" | ")?.substringBefore(" - Visorando")?.substringBefore(" - komoot")
+        ?.trim()?.ifBlank { null }
 
     fun importGpxText(gpx: String, pageUrl: String?) {
         if (done) return
@@ -123,14 +176,11 @@ fun BrowserScreen(url: String, onBack: () -> Unit, onImported: (Hike) -> Unit) {
             busy = true
             try {
                 val hike = withContext(Dispatchers.IO) {
-                    val source = when {
-                        pageUrl?.contains("komoot") == true -> "Komoot"
-                        pageUrl?.contains("visorando") == true -> "Visorando"
-                        else -> "GPX"
-                    }
                     val parsed = GpxParser.parse(gpx)
-                    val name = parsed.name ?: webView?.title?.substringBefore(" - ")?.ifBlank { null } ?: "Rando $source"
-                    ElevationService.fillMissing(LinkImporter.newHike(name, source, pageUrl ?: url, parsed.points))
+                    val src = sourceOf(pageUrl)
+                    ElevationService.fillMissing(
+                        LinkImporter.newHike(parsed.name ?: pageName() ?: "Rando $src", src, pageUrl ?: url, parsed.points)
+                    )
                 }
                 onImported(hike)
             } catch (e: Exception) {
@@ -142,36 +192,77 @@ fun BrowserScreen(url: String, onBack: () -> Unit, onImported: (Hike) -> Unit) {
         }
     }
 
-    /** Une adresse qui ressemble à un GPX : on la récupère nous-mêmes avec la session du navigateur. */
-    fun tryGpxUrl(gpxUrl: String, pageUrl: String?) {
-        if (done || !tried.add(gpxUrl)) return
-        diag = "Lien GPX repéré : $gpxUrl"
+    /** Une adresse candidate : on la télécharge nous-mêmes avec la session du navigateur. */
+    fun tryUrl(candidate: String, pageUrl: String?, why: String) {
+        if (done || !usable(candidate) || !tried.add(candidate)) return
         scope.launch {
-            busy = true
-            val text = withContext(Dispatchers.IO) { Http.getText(gpxUrl, "application/gpx+xml, application/xml, */*", pageUrl) }
-            busy = false
+            val text = withContext(Dispatchers.IO) {
+                Http.getText(candidate, "application/gpx+xml, application/xml, */*", pageUrl)
+            }
             if (GpxParser.looksLikeGpx(text)) {
-                importGpxText(text!!, pageUrl)
-            } else if (!done) {
-                status = "Le site n'a pas renvoyé de GPX. Es-tu bien connecté ? Connecte-toi puis retouche « GPX »."
-                tried.remove(gpxUrl)
+                addLog("GPX trouvé ($why)")
+                importGpxText(text!!, pageUrl ?: currentUrl)
+            } else {
+                addLog("$why, pas un GPX : $candidate")
             }
         }
     }
 
-    fun retryAuto() {
-        val current = webView?.url ?: url
-        scope.launch {
-            busy = true
-            status = null
-            try {
-                onImported(LinkImporter.import(current))
-            } catch (e: Exception) {
-                status = e.message
-            } finally {
-                busy = false
+    fun scanPage(view: WebView) {
+        view.evaluateJavascript(SCAN_JS) { res ->
+            val json = runCatching { JSONTokener(res).nextValue() as? String }.getOrNull() ?: return@evaluateJavascript
+            val arr = runCatching { JSONArray(json) }.getOrNull() ?: return@evaluateJavascript
+            for (i in 0 until arr.length()) tryUrl(arr.getString(i), view.url, "lien de la page")
+        }
+    }
+
+    /** Importer la page affichée : tracé contenu dans la page, sinon import automatique par lien. */
+    fun importPage(silent: Boolean = false) {
+        val w = webView ?: return
+        val pageUrl = w.url ?: url
+        busy = true
+        if (!silent) status = "Recherche du tracé dans la page…"
+        w.evaluateJavascript("document.documentElement.outerHTML") { res ->
+            scope.launch {
+                val html = runCatching { JSONTokener(res).nextValue() as? String }.getOrNull().orEmpty()
+                val pts = withContext(Dispatchers.Default) { PageScraper.bestTrack(html) }
+                if (pts.size >= 20) {
+                    val src = sourceOf(pageUrl)
+                    val name = PageScraper.title(html)?.substringBefore(" | ")?.substringBefore(" - ")?.trim()
+                        ?.ifBlank { null } ?: pageName() ?: "Rando $src"
+                    val hike = withContext(Dispatchers.IO) {
+                        ElevationService.fillMissing(LinkImporter.newHike(name, src, pageUrl, pts))
+                    }
+                    busy = false
+                    if (!done) {
+                        done = true
+                        onImported(hike)
+                    }
+                    return@launch
+                }
+                try {
+                    if (sourceOf(pageUrl) == "AllTrails") throw Exception(
+                        "Tracé introuvable dans la page AllTrails. Ouvre la fiche d'un sentier (pas la liste), " +
+                            "ou connecte-toi à AllTrails+ et touche « Télécharger »."
+                    )
+                    val hike = LinkImporter.import(pageUrl)
+                    if (!done) {
+                        done = true
+                        onImported(hike)
+                    }
+                } catch (e: Exception) {
+                    if (!silent) status = e.message
+                } finally {
+                    busy = false
+                }
             }
         }
+        scanPage(w)
+    }
+
+    androidx.activity.compose.BackHandler {
+        val w = webView
+        if (w != null && w.canGoBack()) w.goBack() else onBack()
     }
 
     Scaffold(
@@ -185,10 +276,18 @@ fun BrowserScreen(url: String, onBack: () -> Unit, onImported: (Hike) -> Unit) {
                     }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Retour") }
                 },
                 actions = {
-                    TextButton(onClick = { retryAuto() }, enabled = !busy) { Text("Importer cette page") }
                     IconButton(onClick = { webView?.reload() }) { Icon(Icons.Default.Refresh, "Recharger") }
                 },
             )
+        },
+        floatingActionButton = {
+            if (isHikePage(currentUrl) || isDownloadPage(currentUrl)) {
+                ExtendedFloatingActionButton(
+                    onClick = { importPage() },
+                    icon = { Icon(Icons.Default.Add, null) },
+                    text = { Text("Importer cette rando") },
+                )
+            }
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
@@ -203,13 +302,13 @@ fun BrowserScreen(url: String, onBack: () -> Unit, onImported: (Hike) -> Unit) {
                     }
                     Column {
                         Text(
-                            status ?: "Connecte-toi si besoin, puis touche le bouton GPX de la page.",
+                            status ?: "Ouvre une rando puis touche « Importer cette rando », ou le bouton GPX du site.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
-                        diag?.let {
+                        log.forEach {
                             Text(
-                                it, maxLines = 3,
+                                it, maxLines = 2,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
                             )
@@ -217,104 +316,117 @@ fun BrowserScreen(url: String, onBack: () -> Unit, onImported: (Hike) -> Unit) {
                     }
                 }
             }
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        val self = this
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.userAgentString = Http.UA
-                        settings.setSupportMultipleWindows(true)
-                        settings.javaScriptCanOpenWindowsAutomatically = true
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            Box(Modifier.fillMaxSize()) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            val self = this
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.userAgentString = Http.UA
+                            settings.setSupportMultipleWindows(true)
+                            settings.javaScriptCanOpenWindowsAutomatically = true
+                            CookieManager.getInstance().setAcceptCookie(true)
+                            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
-                        addJavascriptInterface(object {
-                            @JavascriptInterface
-                            fun onGpx(text: String) {
-                                main.post { importGpxText(text, self.url) }
-                            }
-
-                            @JavascriptInterface
-                            fun onUrl(u: String) {
-                                main.post { tryGpxUrl(u, self.url) }
-                            }
-
-                            @JavascriptInterface
-                            fun onClickInfo(html: String) {
-                                main.post { if (diag == null) diag = "Bouton : $html" }
-                            }
-
-                            @JavascriptInterface
-                            fun onError(msg: String) {
-                                main.post { status = "Téléchargement impossible : $msg" }
-                            }
-                        }, "RandoBridge")
-
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageStarted(view: WebView, u: String?, favicon: Bitmap?) {
-                                view.evaluateJavascript(HOOK_JS, null)
-                            }
-
-                            override fun onPageFinished(view: WebView, u: String?) {
-                                view.evaluateJavascript(HOOK_JS, null)
-                            }
-
-                            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                                val u = request.url.toString()
-                                if (looksLikeGpxUrl(u)) {
-                                    tryGpxUrl(u, view.url)
-                                    return true
+                            addJavascriptInterface(object {
+                                @JavascriptInterface
+                                fun onGpx(text: String) {
+                                    main.post { addLog("GPX généré par la page"); importGpxText(text, self.url) }
                                 }
-                                return false
-                            }
 
-                            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                                val u = request.url.toString()
-                                if (looksLikeGpxUrl(u)) main.post { tryGpxUrl(u, self.url) }
-                                return null
-                            }
-                        }
+                                @JavascriptInterface
+                                fun onCandidate(u: String) {
+                                    main.post { tryUrl(u, self.url, "lien du bouton") }
+                                }
 
-                        // Liens qui s'ouvrent dans un nouvel onglet : on récupère l'adresse visée
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
-                                val popup = WebView(view.context)
-                                popup.webViewClient = object : WebViewClient() {
-                                    override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
-                                        val u = request.url.toString()
-                                        if (looksLikeGpxUrl(u)) tryGpxUrl(u, self.url) else self.loadUrl(u)
-                                        v.destroy()
-                                        return true
+                                @JavascriptInterface
+                                fun onLog(msg: String) {
+                                    main.post { addLog(msg) }
+                                }
+                            }, "RandoBridge")
+
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageStarted(view: WebView, u: String?, favicon: Bitmap?) {
+                                    currentUrl = u
+                                    view.evaluateJavascript(HOOK_JS, null)
+                                }
+
+                                override fun onPageFinished(view: WebView, u: String?) {
+                                    currentUrl = u
+                                    view.evaluateJavascript(HOOK_JS, null)
+                                    if (isDownloadPage(u)) {
+                                        addLog("Page de téléchargement : $u")
+                                        scanPage(view)
+                                        // le site lance le fichier après quelques secondes : on re-scanne
+                                        scope.launch { delay(3500); scanPage(view) }
+                                    }
+                                    if (autoImport && !autoTried && isHikePage(u)) {
+                                        autoTried = true
+                                        scope.launch { delay(2500); importPage(silent = true) }
                                     }
                                 }
-                                popup.setDownloadListener { u, _, _, _, _ -> tryGpxUrl(u, self.url) }
-                                (resultMsg.obj as WebView.WebViewTransport).webView = popup
-                                resultMsg.sendToTarget()
-                                return true
-                            }
-                        }
 
-                        setDownloadListener { dlUrl, _, _, _, _ ->
-                            if (dlUrl.startsWith("blob:") || dlUrl.startsWith("data:")) {
-                                val safe = dlUrl.replace("'", "%27")
-                                evaluateJavascript(
-                                    "fetch('$safe').then(r=>r.text()).then(t=>RandoBridge.onGpx(t))" +
-                                        ".catch(e=>RandoBridge.onError(String(e)))",
-                                    null,
-                                )
-                            } else {
-                                val page = this.url
-                                tried.remove(dlUrl)
-                                tryGpxUrl(dlUrl, page)
+                                override fun doUpdateVisitedHistory(view: WebView, u: String?, isReload: Boolean) {
+                                    currentUrl = u
+                                }
+
+                                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                                    val u = request.url.toString()
+                                    if (mentionsGpx(u)) {
+                                        tryUrl(u, view.url, "navigation")
+                                        return true
+                                    }
+                                    return false
+                                }
+
+                                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                                    val u = request.url.toString()
+                                    if (mentionsGpx(u)) main.post { tryUrl(u, self.url, "requête") }
+                                    return null
+                                }
                             }
+
+                            // Liens qui s'ouvrent dans un nouvel onglet : on récupère l'adresse visée
+                            webChromeClient = object : WebChromeClient() {
+                                override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+                                    val popup = WebView(view.context)
+                                    popup.webViewClient = object : WebViewClient() {
+                                        override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                                            val u = request.url.toString()
+                                            if (mentionsGpx(u)) tryUrl(u, self.url, "nouvel onglet") else self.loadUrl(u)
+                                            v.destroy()
+                                            return true
+                                        }
+                                    }
+                                    popup.setDownloadListener { u, _, _, _, _ -> tryUrl(u, self.url, "téléchargement") }
+                                    (resultMsg.obj as WebView.WebViewTransport).webView = popup
+                                    resultMsg.sendToTarget()
+                                    return true
+                                }
+                            }
+
+                            setDownloadListener { dlUrl, _, disposition, mime, _ ->
+                                addLog("Téléchargement : ${mime ?: "?"} ${disposition ?: ""}")
+                                if (dlUrl.startsWith("blob:") || dlUrl.startsWith("data:")) {
+                                    val safe = dlUrl.replace("'", "%27")
+                                    evaluateJavascript(
+                                        "fetch('$safe').then(r=>r.text()).then(t=>RandoBridge.onGpx(t))" +
+                                            ".catch(e=>RandoBridge.onLog('Erreur blob : '+e))",
+                                        null,
+                                    )
+                                } else {
+                                    tried.remove(dlUrl)
+                                    tryUrl(dlUrl, this.url, "téléchargement")
+                                }
+                            }
+                            loadUrl(url)
+                            webView = this
                         }
-                        loadUrl(url)
-                        webView = this
-                    }
-                },
-            )
+                    },
+                )
+            }
         }
     }
 }

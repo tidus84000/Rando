@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -61,7 +62,8 @@ sealed interface Pending {
 sealed interface Screen {
     data object Home : Screen
     data class Add(val prefill: String = "", val auto: Boolean = false) : Screen
-    data class Browser(val url: String) : Screen
+    data class Browser(val url: String, val auto: Boolean = false, val fromSearch: Boolean = false) : Screen
+    data object Search : Screen
     data class Detail(val id: String) : Screen
 }
 
@@ -76,6 +78,7 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
     val hikes = remember(version) { store.all() }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    var lastPlace by remember { mutableStateOf<fr.tidus.rando.importers.Place?>(null) }
 
     fun saved(h: Hike) {
         store.save(h)
@@ -100,7 +103,7 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
 
     BackHandler(enabled = screen != Screen.Home) {
         screen = when (val s = screen) {
-            is Screen.Browser -> Screen.Add(s.url)
+            is Screen.Browser -> if (s.fromSearch) Screen.Search else Screen.Add(s.url)
             else -> Screen.Home
         }
     }
@@ -116,6 +119,7 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
                     prefs.edit().putBoolean("dark", dark).apply()
                 },
                 onAdd = { screen = Screen.Add() },
+                onSearch = { screen = Screen.Search },
                 onOpen = { screen = Screen.Detail(it.id) },
             )
             is Screen.Add -> AddScreen(
@@ -123,13 +127,20 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
                 auto = s.auto,
                 onBack = { screen = Screen.Home },
                 onImported = { saved(it) },
-                onOpenBrowser = { screen = Screen.Browser(it) },
+                onOpenBrowser = { u, auto -> screen = Screen.Browser(u, auto) },
                 importFile = { uri -> importUri(context, uri) },
             )
             is Screen.Browser -> BrowserScreen(
                 url = s.url,
-                onBack = { screen = Screen.Add(s.url) },
+                autoImport = s.auto,
+                onBack = { screen = if (s.fromSearch) Screen.Search else Screen.Add(s.url) },
                 onImported = { saved(it) },
+            )
+            Screen.Search -> SearchScreen(
+                initialPlace = lastPlace,
+                onPlace = { lastPlace = it },
+                onBack = { screen = Screen.Home },
+                onOpen = { screen = Screen.Browser(it, auto = false, fromSearch = true) },
             )
             is Screen.Detail -> {
                 val hike = hikes.firstOrNull { it.id == s.id } ?: store.get(s.id)
@@ -174,6 +185,7 @@ private fun HomeScreen(
     snackbar: SnackbarHostState,
     onToggleDark: () -> Unit,
     onAdd: () -> Unit,
+    onSearch: () -> Unit,
     onOpen: (Hike) -> Unit,
 ) {
     Scaffold(
@@ -181,6 +193,7 @@ private fun HomeScreen(
             TopAppBar(
                 title = { Text("Rando", fontWeight = FontWeight.Bold) },
                 actions = {
+                    IconButton(onClick = onSearch) { Icon(Icons.Default.Search, contentDescription = "Trouver une rando") }
                     IconButton(onClick = onToggleDark) { Text(if (dark) "☀️" else "🌙") }
                 },
             )
@@ -202,8 +215,8 @@ private fun HomeScreen(
                     Text("Aucune rando pour l'instant", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Dans Komoot ou Visorando, touche « Partager » puis choisis Rando. " +
-                            "Tu peux aussi coller un lien ou importer un fichier GPX avec le bouton Ajouter.",
+                        "Touche 🔍 pour trouver des randos autour de toi sur Komoot, Visorando et AllTrails. " +
+                            "Tu peux aussi partager une rando vers Rando, coller un lien ou importer un GPX.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

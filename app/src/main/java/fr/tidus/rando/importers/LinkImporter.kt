@@ -20,6 +20,10 @@ object LinkImporter {
         val url = extractUrl(input) ?: throw ImportException("Aucun lien trouvé. Colle l'adresse d'une rando Komoot ou Visorando.")
         val host = url.toHttpUrlOrNull()?.host?.lowercase().orEmpty()
         val hike = when {
+            "alltrails" in host -> throw ImportException(
+                "AllTrails protège ses pages contre les robots : la rando s'ouvre dans le navigateur intégré.",
+                needsBrowser = true,
+            )
             "komoot" in host || "kmt.io" in host -> KomootImporter.import(url)
             "visorando" in host -> VisorandoImporter.import(url)
             else -> GenericGpx.import(url)
@@ -144,6 +148,8 @@ object VisorandoImporter {
                 return LinkImporter.newHike(name, "Visorando", url, parsed.points)
             }
         }
+        val scraped = PageScraper.bestTrack(html)
+        if (scraped.size >= 20) return LinkImporter.newHike(name, "Visorando", url, scraped)
         throw ImportException(
             "Visorando demande d'être connecté pour récupérer le tracé. Ouvre la page dans le navigateur intégré, connecte-toi (compte gratuit) puis touche « GPX ».",
             needsBrowser = true,
@@ -188,6 +194,81 @@ object PageScraper {
         }
         if (cur.size > best.size) best = cur
         return best
+    }
+
+    /** Tracé le plus probable d'une page : suites de coordonnées ou polyline encodée (AllTrails…). */
+    fun bestTrack(html: String): List<TrackPoint> {
+        val coords = coordinates(html)
+        val poly = polylines(html)
+        return if (poly.size > coords.size) poly else coords
+    }
+
+    private val polyRegex = Regex(
+        """\\?"(?:polyline|encodedPolyline|encoded_polyline|points|line|polylinePoints)\\?"\s*:\s*\\?"((?:[^"\\]|\\.){40,})\\?""""
+    )
+
+    fun polylines(html: String): List<TrackPoint> {
+        var best = emptyList<TrackPoint>()
+        for (m in polyRegex.findAll(html)) {
+            val enc = unescape(m.groupValues[1])
+            for (precision in listOf(5, 6)) {
+                val pts = runCatching { decodePolyline(enc, precision) }.getOrNull() ?: continue
+                if (pts.size > best.size && plausible(pts)) best = pts
+            }
+        }
+        return best
+    }
+
+    private fun unescape(s: String): String {
+        var t = s
+        // la chaîne peut être échappée une ou deux fois (JSON dans du JSON)
+        repeat(2) {
+            t = t.replace("\\\\", "\u0000").replace("\\\"", "\"").replace("\\/", "/").replace("\u0000", "\\")
+        }
+        return t
+    }
+
+    fun decodePolyline(enc: String, precision: Int): List<TrackPoint> {
+        val factor = Math.pow(10.0, precision.toDouble())
+        val out = ArrayList<TrackPoint>()
+        var i = 0
+        var lat = 0L
+        var lng = 0L
+        while (i < enc.length) {
+            var shift = 0
+            var result = 0L
+            var b: Int
+            do {
+                b = enc[i++].code - 63
+                result = result or ((b and 0x1f).toLong() shl shift)
+                shift += 5
+            } while (b >= 0x20 && i < enc.length)
+            lat += if (result and 1L != 0L) (result shr 1).inv() else result shr 1
+            if (i >= enc.length) break
+            shift = 0
+            result = 0L
+            do {
+                b = enc[i++].code - 63
+                result = result or ((b and 0x1f).toLong() shl shift)
+                shift += 5
+            } while (b >= 0x20 && i < enc.length)
+            lng += if (result and 1L != 0L) (result shr 1).inv() else result shr 1
+            out.add(TrackPoint(lat / factor, lng / factor, null))
+        }
+        return out
+    }
+
+    private fun plausible(pts: List<TrackPoint>): Boolean {
+        if (pts.size < 20) return false
+        if (pts.any { it.lat !in -90.0..90.0 || it.lon !in -180.0..180.0 }) return false
+        var total = 0.0
+        var maxStep = 0.0
+        for (i in 1 until pts.size) {
+            val d = fr.tidus.rando.data.Geo.haversineKm(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon)
+            total += d
+            if (d > maxStep) maxStep = d
+        }
+        return total in 0.3..300.0 && maxStep < 5.0
     }
 
     fun title(html: String): String? {

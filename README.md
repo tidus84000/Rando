@@ -2,8 +2,12 @@
 
 Appli Android de randonnée avec une météo précise le long du parcours.
 
-## Fonctions (v0.1)
+## Fonctions (v0.2)
 
+- **Recherche autour de toi** (🔍) : à partir de ta position ou d'une adresse, avec un rayon, ouvre les résultats Komoot, AllTrails et Visorando dans le navigateur intégré ; « Importer cette rando » sur la fiche choisie.
+- **AllTrails** : import via le navigateur intégré (lecture du tracé dans la page, ou GPX pour les comptes AllTrails+).
+- **Y aller** : lance le trajet en voiture jusqu'au point de départ (Google Maps / Waze…).
+- **Sac à préparer** : eau, nourriture, vêtements, matériel et sécurité calculés selon la durée, le dénivelé, l'altitude et la météo prévue (options chien / enfant porté), liste à cocher.
 - **Import direct** d'une rando Komoot ou Visorando : coller le lien, ou « Partager → Rando » depuis l'appli Komoot / Visorando.
 - **Navigateur intégré** pour les randos privées ou quand le site demande une connexion : le GPX téléchargé est intercepté et importé.
 - **Import GPX** classique (fichier, ou « Ouvrir avec Rando »).

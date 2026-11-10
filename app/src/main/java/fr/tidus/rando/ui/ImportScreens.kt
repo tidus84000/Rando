@@ -67,7 +67,7 @@ fun AddScreen(
     auto: Boolean,
     onBack: () -> Unit,
     onImported: (Hike) -> Unit,
-    onOpenBrowser: (String) -> Unit,
+    onOpenBrowser: (String, Boolean) -> Unit,
     importFile: suspend (Uri) -> Hike,
 ) {
     var text by remember { mutableStateOf(prefill) }
@@ -79,6 +79,11 @@ fun AddScreen(
 
     fun run() {
         if (busy) return
+        val link = LinkImporter.extractUrl(text)
+        if (link != null && link.contains("alltrails", ignoreCase = true)) {
+            onOpenBrowser(link, true)
+            return
+        }
         scope.launch {
             busy = true
             error = null
@@ -127,7 +132,7 @@ fun AddScreen(
             Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Lien Komoot ou Visorando", style = MaterialTheme.typography.titleMedium)
+            Text("Lien Komoot, Visorando ou AllTrails", style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
@@ -147,7 +152,7 @@ fun AddScreen(
                         val url = LinkImporter.extractUrl(text)
                         if (needsBrowser && url != null) {
                             Spacer(Modifier.height(8.dp))
-                            Button(onClick = { onOpenBrowser(url) }) { Text("Ouvrir dans le navigateur intégré") }
+                            Button(onClick = { onOpenBrowser(url, false) }) { Text("Ouvrir dans le navigateur intégré") }
                         }
                     }
                 }
@@ -159,7 +164,7 @@ fun AddScreen(
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                "Astuce : dans l'appli Komoot ou Visorando, touche « Partager » sur une rando et choisis Rando, " +
+                "Astuce : dans l'appli Komoot, Visorando ou AllTrails, touche « Partager » sur une rando et choisis Rando, " +
                     "l'import se lance tout seul.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
