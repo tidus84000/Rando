@@ -59,7 +59,7 @@ object SmartImport {
             val gpx = got.texts.firstOrNull { GpxParser.looksLikeGpx(it) }
             val pts = if (gpx != null) runCatching { GpxParser.parse(gpx).points }.getOrDefault(emptyList())
             else withContext(Dispatchers.Default) { TrackExtractor.best(got.texts, where) }
-            if (pts.size >= 20) {
+            if (pts.size >= 10) {
                 val name = pageHtml?.let { PageScraper.title(it) }?.let { cleanTitle(it) } ?: "Rando $source"
                 return withContext(Dispatchers.IO) { ElevationService.fillMissing(LinkImporter.newHike(name, source, url, pts)) }
             }
@@ -68,8 +68,8 @@ object SmartImport {
 
         throw ImportException(
             when (source) {
-                "AllTrails" -> "AllTrails ne donne pas le tracé librement : le téléchargement GPX est réservé aux abonnés AllTrails+. " +
-                    "Touche « Voir la fiche » puis le bouton ⬇ (connecté à ton compte), ou importe un fichier GPX."
+                "AllTrails" -> "AllTrails n'envoie le tracé que quand on ouvre sa carte. Touche « Voir la fiche », " +
+                    "touche la petite carte pour l'agrandir, puis « Importer cette rando »."
                 "Visorando" -> "Touche « Voir la fiche », connecte-toi à ton compte Visorando puis touche « GPX » : l'appli récupère le fichier."
                 else -> "Tracé introuvable automatiquement. Ouvre la fiche pour télécharger le GPX."
             },

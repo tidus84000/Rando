@@ -55,8 +55,43 @@ object TrackExtractor {
         return best
     }
 
+    /**
+     * GeoJSON dont le tracé est une suite de points (Visorando : getRandoGeoJson),
+     * avec l'altitude prise dans « chartdata » quand elle est fournie.
+     */
+    fun pointCollection(root: Any?): List<TrackPoint> {
+        val obj = root as? JSONObject ?: return emptyList()
+        val fc = obj.optJSONObject("geojson") ?: obj.takeIf { it.optString("type") == "FeatureCollection" } ?: return emptyList()
+        val feats = fc.optJSONArray("features") ?: return emptyList()
+        val pts = ArrayList<Pair<Int, TrackPoint>>()
+        for (i in 0 until feats.length()) {
+            val f = feats.optJSONObject(i) ?: continue
+            val g = f.optJSONObject("geometry") ?: continue
+            if (g.optString("type") != "Point") continue
+            val c = g.optJSONArray("coordinates") ?: continue
+            val lon = c.optDouble(0)
+            val lat = c.optDouble(1)
+            if (lat.isNaN() || lon.isNaN()) continue
+            val idx = f.optJSONObject("properties")?.optInt("index", i) ?: i
+            val ele = c.optDouble(2).takeUnless { it.isNaN() }
+            pts.add(idx to TrackPoint(lat, lon, ele))
+        }
+        if (pts.size < 10) return emptyList()
+        pts.sortBy { it.first }
+        var list = pts.map { it.second }
+        val chart = obj.optJSONObject("chartdata")?.optJSONArray("data")
+        if (chart != null && chart.length() == list.size) {
+            list = list.mapIndexed { i, p ->
+                val alt = chart.optJSONArray(i)?.optDouble(1)?.takeUnless { it.isNaN() }
+                if (p.ele == null && alt != null) p.copy(ele = alt) else p
+            }
+        }
+        return list
+    }
+
     /** Tableaux de paires de nombres dans du JSON (GeoJSON : [lon, lat] ; sinon [lat, lon]). */
     fun fromJson(root: Any?): List<TrackPoint> {
+        pointCollection(root).let { if (it.size >= 10) return it }
         var best = emptyList<TrackPoint>()
         fun walk(node: Any?, key: String?, depth: Int) {
             if (depth > 30) return
@@ -106,7 +141,7 @@ object TrackExtractor {
     }
 
     fun plausible(pts: List<TrackPoint>): Boolean {
-        if (pts.size < 20) return false
+        if (pts.size < 10) return false
         if (pts.any { it.lat !in -90.0..90.0 || it.lon !in -180.0..180.0 }) return false
         var total = 0.0
         var maxStep = 0.0
@@ -164,16 +199,19 @@ object TrackExtractor {
                 u.startsWith("/") -> out.add(host + u)
             }
         }
-        // <a ... href="...">texte</a> : lien de téléchargement ou « cliquez-ici »
+        // 1) liens directs vers un fichier .gpx (Visorando : « cliquez-ici » → visorando-XXXX.gpx)
+        Regex("""(?:https?:)?//[^"'\s<>]+\.gpx(?:\?[^"'\s<>]*)?|(?<=["'])/[^"'\s<>]+\.gpx(?:\?[^"'\s<>]*)?""", RegexOption.IGNORE_CASE)
+            .findAll(html).forEach { add(it.value) }
+        // 2) <a ... href="...">texte</a> : lien de téléchargement ou « cliquez-ici »
         Regex("""<a\b([^>]*)>(.*?)</a>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)).findAll(html).forEach { m ->
             val attrs = m.groupValues[1]
             val text = m.groupValues[2]
             val href = Regex("""href=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1) ?: return@forEach
-            if (Regex("""gpx|t[ée]l[ée]charg|download|export|task=""", RegexOption.IGNORE_CASE).containsMatchIn(href) ||
-                Regex("""cliquez|t[ée]l[ée]charg|download|gpx""", RegexOption.IGNORE_CASE).containsMatchIn(text)
+            if (Regex("""gpx""", RegexOption.IGNORE_CASE).containsMatchIn(href) ||
+                Regex("""cliquez""", RegexOption.IGNORE_CASE).containsMatchIn(text)
             ) add(href)
         }
-        Regex("""(?:src|data-href|data-url|content)=["']([^"']*(?:gpx|telecharg|download|task=)[^"']*)["']""", RegexOption.IGNORE_CASE)
+        Regex("""(?:src|data-href|data-url|content)=["']([^"']*gpx[^"']*)["']""", RegexOption.IGNORE_CASE)
             .findAll(html).forEach { add(it.groupValues[1].substringAfter("url=", it.groupValues[1])) }
         Regex("""(?:location(?:\.href)?\s*=|location\.replace\(|window\.open\()\s*["']([^"']+)["']""")
             .findAll(html).forEach { add(it.groupValues[1]) }

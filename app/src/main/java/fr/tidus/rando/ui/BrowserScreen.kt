@@ -271,7 +271,7 @@ fun BrowserScreen(
                 val pts = withContext(Dispatchers.Default) {
                     fr.tidus.rando.importers.TrackExtractor.best(ArrayList(captured) + html)
                 }
-                if (pts.size >= 20) {
+                if (pts.size >= 10) {
                     val src = sourceOf(pageUrl)
                     val name = PageScraper.title(html)?.substringBefore(" | ")?.substringBefore(" - ")?.trim()
                         ?.ifBlank { null } ?: pageName() ?: "Rando $src"
@@ -359,7 +359,9 @@ fun BrowserScreen(
                     }
                     Column {
                         Text(
-                            status ?: "Ouvre une rando puis touche « Importer cette rando », ou le bouton GPX du site.",
+                            status ?: if (currentUrl?.contains("alltrails") == true && isHikePage(currentUrl))
+                                "AllTrails : touche la petite carte pour l'agrandir (le tracé se charge), puis « Importer cette rando »."
+                            else "Ouvre une rando puis touche « Importer cette rando », ou le bouton GPX du site.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
