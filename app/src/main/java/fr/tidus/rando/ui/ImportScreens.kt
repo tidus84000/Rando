@@ -69,27 +69,24 @@ fun AddScreen(
     onImported: (Hike) -> Unit,
     onOpenBrowser: (String, Boolean) -> Unit,
     importFile: suspend (Uri) -> Hike,
+    hidden: fr.tidus.rando.explore.HiddenBrowser? = null,
 ) {
     var text by remember { mutableStateOf(prefill) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var needsBrowser by remember { mutableStateOf(false) }
+    var progressMsg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
 
     fun run() {
         if (busy) return
-        val link = LinkImporter.extractUrl(text)
-        if (link != null && link.contains("alltrails", ignoreCase = true)) {
-            onOpenBrowser(link, true)
-            return
-        }
         scope.launch {
             busy = true
             error = null
             needsBrowser = false
             try {
-                onImported(LinkImporter.import(text))
+                onImported(fr.tidus.rando.explore.SmartImport.import(text, hidden) { progressMsg = it })
             } catch (e: ImportException) {
                 error = e.message
                 needsBrowser = e.needsBrowser
@@ -144,7 +141,10 @@ fun AddScreen(
                 OutlinedButton(onClick = { clipboard.getText()?.text?.let { text = it } }) { Text("Coller") }
                 Button(onClick = { run() }, enabled = !busy && text.isNotBlank()) { Text("Récupérer la rando") }
             }
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (busy) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                progressMsg?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            }
             error?.let { msg ->
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Column(Modifier.padding(12.dp)) {

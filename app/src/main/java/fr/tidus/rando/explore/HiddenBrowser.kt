@@ -20,7 +20,7 @@ import kotlin.coroutines.resume
 private const val JSON_HOOK = """
 (function(){
   if (window.__randoJson) return; window.__randoJson = true;
-  function send(t){ try { if (t && t.length < 4000000 && /^\s*[\[{]/.test(t)) RandoHidden.onJson(t); } catch(e){} }
+  function send(t){ try { if (t && t.length > 80 && t.length < 6000000 && (/^\s*[\[{]/.test(t) || /<gpx|<kml|<coordinates/i.test(t.substring(0, 3000)))) RandoHidden.onJson(t); } catch(e){} }
   var of = window.fetch;
   if (of) window.fetch = function(){
     return of.apply(this, arguments).then(function(r){ try { r.clone().text().then(send); } catch(e){} return r; });

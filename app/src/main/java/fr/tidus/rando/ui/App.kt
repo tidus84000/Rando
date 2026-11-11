@@ -80,6 +80,7 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val explore = remember { ExploreState() }
+    val hidden = remember { fr.tidus.rando.explore.HiddenBrowser() }
     var tab by remember { mutableIntStateOf(0) }
 
     fun saved(h: Hike) {
@@ -111,6 +112,12 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
     }
 
     RandoTheme(dark) {
+      Box(Modifier.fillMaxSize()) {
+        // Navigateur invisible partagé (sous les écrans) : imports et recherche en arrière-plan
+        androidx.compose.ui.viewinterop.AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx -> android.webkit.WebView(ctx).also { hidden.attach(it) } },
+        )
         when (val s = screen) {
             Screen.Home -> {
                 val toggleDark = {
@@ -135,6 +142,7 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
                         if (tab == 0) {
                             ExploreScreen(
                                 state = explore,
+                                hidden = hidden,
                                 savedHikes = hikes,
                                 dark = dark,
                                 onToggleDark = toggleDark,
@@ -163,10 +171,12 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
                 onImported = { saved(it) },
                 onOpenBrowser = { u, auto -> screen = Screen.Browser(u, auto) },
                 importFile = { uri -> importUri(context, uri) },
+                hidden = hidden,
             )
             is Screen.Browser -> BrowserScreen(
                 url = s.url,
                 autoImport = s.auto,
+                hidden = hidden,
                 onBack = { screen = if (s.fromSearch) Screen.Home else Screen.Add(s.url) },
                 onImported = { saved(it) },
             )
@@ -191,6 +201,7 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
                 }
             }
         }
+      }
     }
 }
 

@@ -65,7 +65,11 @@ import org.json.JSONTokener
 private const val HOOK_JS = """
 (function(){
   if (window.__randoHook) return; window.__randoHook = true;
-  function chk(t){ try { if (t && typeof t === 'string' && t.indexOf('<gpx') >= 0) RandoBridge.onGpx(t); } catch(e){} }
+  function chk(t){ try {
+    if (!t || typeof t !== 'string') return;
+    if (t.indexOf('<gpx') >= 0) RandoBridge.onGpx(t);
+    else if (t.length > 200 && t.length < 6000000 && (/^\s*[\[{]/.test(t) || /<kml|<coordinates/i.test(t.substring(0, 3000)))) RandoBridge.onData(t);
+  } catch(e){} }
   function abs(u){ try { return String(new URL(u, location.href)); } catch(e){ return String(u); } }
   var of = window.fetch;
   if (of) window.fetch = function(){
@@ -119,6 +123,30 @@ private const val SCAN_JS = """
 })();
 """
 
+/** Retire les fenêtres par-dessus la page (inscription, cookies, « ouvre l'appli ») qui grisent l'écran. */
+private const val UNBLOCK_JS = """
+(function(){
+  var n = 0;
+  document.querySelectorAll('body *').forEach(function(el){
+    var cs = getComputedStyle(el);
+    if ((cs.position === 'fixed' || cs.position === 'sticky') && (parseInt(cs.zIndex) || 0) >= 10) {
+      var r = el.getBoundingClientRect();
+      if (r.width >= innerWidth * 0.6 && r.height >= innerHeight * 0.3) { el.remove(); n++; }
+    }
+  });
+  document.querySelectorAll('dialog[open]').forEach(function(d){ d.close(); n++; });
+  ['html', 'body'].forEach(function(t){
+    var e = document.querySelector(t); if (!e) return;
+    e.style.setProperty('overflow', 'auto', 'important');
+    e.style.setProperty('position', 'static', 'important');
+    e.classList.remove('modal-open', 'no-scroll', 'noscroll', 'overflow-hidden', 'is-locked');
+  });
+  document.querySelectorAll('[inert]').forEach(function(e){ e.removeAttribute('inert'); });
+  document.querySelectorAll('[aria-hidden="true"]').forEach(function(e){ if (e.children.length > 3) e.removeAttribute('aria-hidden'); });
+  return n;
+})();
+"""
+
 private val STATIC = Regex("""\.(js|css|png|jpe?g|svg|webp|gif|woff2?|ico|mp4)(\?|$)""", RegexOption.IGNORE_CASE)
 private val NOISE = Regex("""matomo|analytics|googletag|google-analytics|doubleclick|facebook|sentry|datadome|hotjar|criteo|adservice""", RegexOption.IGNORE_CASE)
 private fun usable(u: String) = u.startsWith("http") && !STATIC.containsMatchIn(u) && !NOISE.containsMatchIn(u)
@@ -140,7 +168,14 @@ fun isHikePage(u: String?): Boolean {
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun BrowserScreen(url: String, autoImport: Boolean, onBack: () -> Unit, onImported: (Hike) -> Unit) {
+fun BrowserScreen(
+    url: String,
+    autoImport: Boolean,
+    onBack: () -> Unit,
+    onImported: (Hike) -> Unit,
+    hidden: fr.tidus.rando.explore.HiddenBrowser? = null,
+) {
+    val captured = remember { java.util.Collections.synchronizedList(ArrayList<String>()) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     val log = remember { mutableStateListOf<String>() }
@@ -202,6 +237,11 @@ fun BrowserScreen(url: String, autoImport: Boolean, onBack: () -> Unit, onImport
             if (GpxParser.looksLikeGpx(text)) {
                 addLog("GPX trouvé ($why)")
                 importGpxText(text!!, pageUrl ?: currentUrl)
+            } else if (text != null && text.contains("<html", true)) {
+                // page intermédiaire (« le téléchargement va démarrer… ») : on suit ses liens
+                val next = fr.tidus.rando.importers.TrackExtractor.downloadLinks(text, candidate)
+                addLog("Page intermédiaire, ${next.size} lien(s) à suivre")
+                next.forEach { tryUrl(it, candidate, "lien de la page intermédiaire") }
             } else {
                 addLog("$why, pas un GPX : $candidate")
             }
@@ -225,7 +265,9 @@ fun BrowserScreen(url: String, autoImport: Boolean, onBack: () -> Unit, onImport
         w.evaluateJavascript("document.documentElement.outerHTML") { res ->
             scope.launch {
                 val html = runCatching { JSONTokener(res).nextValue() as? String }.getOrNull().orEmpty()
-                val pts = withContext(Dispatchers.Default) { PageScraper.bestTrack(html) }
+                val pts = withContext(Dispatchers.Default) {
+                    fr.tidus.rando.importers.TrackExtractor.best(ArrayList(captured) + html)
+                }
                 if (pts.size >= 20) {
                     val src = sourceOf(pageUrl)
                     val name = PageScraper.title(html)?.substringBefore(" | ")?.substringBefore(" - ")?.trim()
@@ -241,11 +283,7 @@ fun BrowserScreen(url: String, autoImport: Boolean, onBack: () -> Unit, onImport
                     return@launch
                 }
                 try {
-                    if (sourceOf(pageUrl) == "AllTrails") throw Exception(
-                        "Tracé introuvable dans la page AllTrails. Ouvre la fiche d'un sentier (pas la liste), " +
-                            "ou connecte-toi à AllTrails+ et touche « Télécharger »."
-                    )
-                    val hike = LinkImporter.import(pageUrl)
+                    val hike = fr.tidus.rando.explore.SmartImport.import(pageUrl, hidden) { if (!silent) status = it }
                     if (!done) {
                         done = true
                         onImported(hike)
@@ -276,6 +314,9 @@ fun BrowserScreen(url: String, autoImport: Boolean, onBack: () -> Unit, onImport
                     }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Retour") }
                 },
                 actions = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        webView?.evaluateJavascript(UNBLOCK_JS) { n -> addLog("Fenêtres retirées : $n") }
+                    }) { Text("🧹 Débloquer") }
                     IconButton(onClick = { webView?.reload() }) { Icon(Icons.Default.Refresh, "Recharger") }
                 },
             )
@@ -334,6 +375,12 @@ fun BrowserScreen(url: String, autoImport: Boolean, onBack: () -> Unit, onImport
                                 @JavascriptInterface
                                 fun onGpx(text: String) {
                                     main.post { addLog("GPX généré par la page"); importGpxText(text, self.url) }
+                                }
+
+                                @JavascriptInterface
+                                fun onData(t: String) {
+                                    captured.add(t)
+                                    while (captured.size > 30) captured.removeAt(0)
                                 }
 
                                 @JavascriptInterface

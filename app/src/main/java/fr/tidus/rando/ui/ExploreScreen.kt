@@ -117,6 +117,7 @@ private val OpenTopoMap = XYTileSource(
 @Composable
 fun ExploreScreen(
     state: ExploreState,
+    hidden: HiddenBrowser,
     savedHikes: List<Hike>,
     dark: Boolean,
     onToggleDark: () -> Unit,
@@ -126,7 +127,6 @@ fun ExploreScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val hidden = remember { HiddenBrowser() }
     var query by remember { mutableStateOf("") }
     var suggestions by remember { mutableStateOf<List<Place>>(emptyList()) }
     var importing by remember { mutableStateOf(false) }
@@ -182,17 +182,13 @@ fun ExploreScreen(
     }
 
     fun importCandidate(c: Candidate) {
-        if (c.source == Source.ALLTRAILS) {
-            onOpenBrowser(c.url, true)
-            return
-        }
         scope.launch {
             importing = true
             message = null
             try {
-                onImported(LinkImporter.import(c.url))
+                onImported(fr.tidus.rando.explore.SmartImport.import(c.url, hidden) { message = it })
             } catch (e: ImportException) {
-                if (e.needsBrowser) onOpenBrowser(c.url, false) else message = e.message
+                message = e.message + if (e.needsBrowser) " (touche « Voir la fiche »)" else ""
             } catch (e: Exception) {
                 message = "Import impossible : ${e.message}"
             } finally {
@@ -202,22 +198,7 @@ fun ExploreScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        // Navigateur invisible (sous la carte) qui interroge Komoot et AllTrails
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    hidden.attach(this)
-                }
-            },
-        )
-        DisposableEffect(Unit) {
-            onDispose {
-                hidden.detach()
-                state.running = emptySet()
-            }
-        }
+        DisposableEffect(Unit) { onDispose { state.running = emptySet() } }
 
         ExploreMap(
             state = state,
