@@ -29,6 +29,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -63,7 +65,6 @@ sealed interface Screen {
     data object Home : Screen
     data class Add(val prefill: String = "", val auto: Boolean = false) : Screen
     data class Browser(val url: String, val auto: Boolean = false, val fromSearch: Boolean = false) : Screen
-    data object Search : Screen
     data class Detail(val id: String) : Screen
 }
 
@@ -78,7 +79,8 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
     val hikes = remember(version) { store.all() }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    var lastPlace by remember { mutableStateOf<fr.tidus.rando.importers.Place?>(null) }
+    val explore = remember { ExploreState() }
+    var tab by remember { mutableIntStateOf(0) }
 
     fun saved(h: Hike) {
         store.save(h)
@@ -103,25 +105,57 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
 
     BackHandler(enabled = screen != Screen.Home) {
         screen = when (val s = screen) {
-            is Screen.Browser -> if (s.fromSearch) Screen.Search else Screen.Add(s.url)
+            is Screen.Browser -> if (s.fromSearch) Screen.Home else Screen.Add(s.url)
             else -> Screen.Home
         }
     }
 
     RandoTheme(dark) {
         when (val s = screen) {
-            Screen.Home -> HomeScreen(
-                hikes = hikes,
-                dark = dark,
-                snackbar = snackbar,
-                onToggleDark = {
+            Screen.Home -> {
+                val toggleDark = {
                     dark = !dark
                     prefs.edit().putBoolean("dark", dark).apply()
-                },
-                onAdd = { screen = Screen.Add() },
-                onSearch = { screen = Screen.Search },
-                onOpen = { screen = Screen.Detail(it.id) },
-            )
+                }
+                Scaffold(
+                    bottomBar = {
+                        NavigationBar {
+                            NavigationBarItem(
+                                selected = tab == 0, onClick = { tab = 0 },
+                                icon = { Text("🗺️") }, label = { Text("Carte") },
+                            )
+                            NavigationBarItem(
+                                selected = tab == 1, onClick = { tab = 1 },
+                                icon = { Text("🥾") }, label = { Text("Mes randos (${hikes.size})") },
+                            )
+                        }
+                    },
+                ) { pad ->
+                    Box(Modifier.padding(bottom = pad.calculateBottomPadding())) {
+                        if (tab == 0) {
+                            ExploreScreen(
+                                state = explore,
+                                savedHikes = hikes,
+                                dark = dark,
+                                onToggleDark = toggleDark,
+                                onImported = { saved(it) },
+                                onOpenHike = { screen = Screen.Detail(it) },
+                                onOpenBrowser = { u, auto -> screen = Screen.Browser(u, auto, fromSearch = true) },
+                            )
+                        } else {
+                            HomeScreen(
+                                hikes = hikes,
+                                dark = dark,
+                                snackbar = snackbar,
+                                onToggleDark = toggleDark,
+                                onAdd = { screen = Screen.Add() },
+                                onSearch = { tab = 0 },
+                                onOpen = { screen = Screen.Detail(it.id) },
+                            )
+                        }
+                    }
+                }
+            }
             is Screen.Add -> AddScreen(
                 prefill = s.prefill,
                 auto = s.auto,
@@ -133,14 +167,8 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
             is Screen.Browser -> BrowserScreen(
                 url = s.url,
                 autoImport = s.auto,
-                onBack = { screen = if (s.fromSearch) Screen.Search else Screen.Add(s.url) },
+                onBack = { screen = if (s.fromSearch) Screen.Home else Screen.Add(s.url) },
                 onImported = { saved(it) },
-            )
-            Screen.Search -> SearchScreen(
-                initialPlace = lastPlace,
-                onPlace = { lastPlace = it },
-                onBack = { screen = Screen.Home },
-                onOpen = { screen = Screen.Browser(it, auto = false, fromSearch = true) },
             )
             is Screen.Detail -> {
                 val hike = hikes.firstOrNull { it.id == s.id } ?: store.get(s.id)
@@ -191,7 +219,7 @@ private fun HomeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Rando", fontWeight = FontWeight.Bold) },
+                title = { Text("Mes randos", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = onSearch) { Icon(Icons.Default.Search, contentDescription = "Trouver une rando") }
                     IconButton(onClick = onToggleDark) { Text(if (dark) "☀️" else "🌙") }
@@ -215,7 +243,7 @@ private fun HomeScreen(
                     Text("Aucune rando pour l'instant", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Touche 🔍 pour trouver des randos autour de toi sur Komoot, Visorando et AllTrails. " +
+                        "Ouvre l'onglet Carte pour voir les randos Komoot, Visorando et AllTrails autour de toi et les importer. " +
                             "Tu peux aussi partager une rando vers Rando, coller un lien ou importer un GPX.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
