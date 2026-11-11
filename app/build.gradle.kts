@@ -15,7 +15,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = runNumber
-        versionName = "0.4.$runNumber"
+        versionName = "0.5.$runNumber"
     }
 
     // La clé de signature n'est jamais dans le dépôt : le workflow la recrée depuis le secret

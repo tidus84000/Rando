@@ -11,19 +11,29 @@ import org.json.JSONTokener
  * GPX, KML, GeoJSON, listes de points lat/lng, polylines encodées.
  */
 object TrackExtractor {
-    fun best(texts: List<String>): List<TrackPoint> {
+    fun best(texts: List<String>, hint: Pair<Double, Double>? = null): List<TrackPoint> {
         var best = emptyList<TrackPoint>()
+        fun near(pts: List<TrackPoint>): Boolean {
+            if (hint == null) return true
+            return pts.any { Geo.haversineKm(it.lat, it.lon, hint.first, hint.second) < 3.0 }
+        }
         fun consider(pts: List<TrackPoint>) {
-            if (pts.size > best.size && plausible(pts)) best = pts
+            if (pts.size > best.size && plausible(pts) && near(pts)) best = pts
         }
         for (t in texts) {
             if (t.length < 100) continue
             if (t.contains("<gpx", true)) runCatching { consider(GpxParser.parse(t).points) }
             if (t.contains("<kml", true) || t.contains("<coordinates>", true)) consider(kml(t))
             consider(PageScraper.bestTrack(t))
+            consider(PageScraper.staticMapPolylines(t))
+            consider(PageScraper.jsPairs(t, hint))
             val trimmed = t.trimStart()
             if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-                runCatching { consider(fromJson(JSONTokener(trimmed).nextValue())) }
+                runCatching {
+                    val pts = fromJson(JSONTokener(trimmed).nextValue())
+                    consider(pts)
+                    consider(pts.map { TrackPoint(it.lon, it.lat, it.ele) }) // ordre inversé
+                }
             }
         }
         return best
@@ -106,6 +116,39 @@ object TrackExtractor {
             if (d > maxStep) maxStep = d
         }
         return total in 0.3..400.0 && maxStep < 5.0
+    }
+
+    private val textPos = Regex("""([NS])\s*([\d.]+)°\s*/\s*([EOW])\s*([\d.]+)°""")
+
+    /** Point de départ écrit dans la page (« N 44.83° / O 0.57° », Visorando). */
+    fun startFromText(html: String): Pair<Double, Double>? {
+        val m = textPos.find(html) ?: return null
+        val lat = m.groupValues[2].toDouble() * if (m.groupValues[1] == "S") -1 else 1
+        val lon = m.groupValues[4].toDouble() * if (m.groupValues[3] == "E") 1 else -1
+        return lat to lon
+    }
+
+    /** Formulaires de la page qui pourraient renvoyer le fichier (action + champs). */
+    fun downloadForms(html: String, base: String): List<Pair<String, Map<String, String>>> {
+        val host = Regex("""^(https?://[^/]+)""").find(base)?.groupValues?.get(1) ?: ""
+        val out = ArrayList<Pair<String, Map<String, String>>>()
+        Regex("""<form\b([^>]*)>(.*?)</form>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)).findAll(html).forEach { m ->
+            val attrs = m.groupValues[1]
+            val body = m.groupValues[2]
+            if (!Regex("""gpx|t[ée]l[ée]charg|download|export""", RegexOption.IGNORE_CASE).containsMatchIn(attrs + body)) return@forEach
+            var action = Regex("""action=["']([^"']*)["']""", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1) ?: base
+            action = android.text.Html.fromHtml(action, android.text.Html.FROM_HTML_MODE_LEGACY).toString()
+            if (action.startsWith("/")) action = host + action else if (!action.startsWith("http")) action = base
+            val fields = LinkedHashMap<String, String>()
+            Regex("""<input\b([^>]*)>""", RegexOption.IGNORE_CASE).findAll(body).forEach { i ->
+                val a = i.groupValues[1]
+                val name = Regex("""name=["']([^"']+)["']""").find(a)?.groupValues?.get(1) ?: return@forEach
+                val value = Regex("""value=["']([^"']*)["']""").find(a)?.groupValues?.get(1) ?: ""
+                fields[name] = android.text.Html.fromHtml(value, android.text.Html.FROM_HTML_MODE_LEGACY).toString()
+            }
+            out.add(action to fields)
+        }
+        return out.take(4)
     }
 
     /** Liens d'une page HTML qui peuvent mener au fichier (page intermédiaire de téléchargement). */

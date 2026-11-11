@@ -186,9 +186,9 @@ fun ExploreScreen(
             importing = true
             message = null
             try {
-                onImported(fr.tidus.rando.explore.SmartImport.import(c.url, hidden) { message = it })
+                onImported(fr.tidus.rando.explore.SmartImport.import(c.url, hidden, c.lat to c.lon) { message = it })
             } catch (e: ImportException) {
-                message = e.message + if (e.needsBrowser) " (touche « Voir la fiche »)" else ""
+                message = e.message
             } catch (e: Exception) {
                 message = "Import impossible : ${e.message}"
             } finally {
@@ -282,7 +282,14 @@ fun ExploreScreen(
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(10.dp)) {
             message?.let {
                 Card(Modifier.fillMaxWidth().padding(bottom = 6.dp).clickable { message = null }) {
-                    Text(it, Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall)
+                    Column(Modifier.padding(10.dp)) {
+                        Text(it, style = MaterialTheme.typography.bodySmall)
+                        if (!importing && fr.tidus.rando.explore.Diagnostics.hasData()) {
+                            androidx.compose.material3.TextButton(onClick = { fr.tidus.rando.explore.Diagnostics.share(context) }) {
+                                Text("📤 Envoyer le diagnostic")
+                            }
+                        }
+                    }
                 }
             }
             val sel = state.selected

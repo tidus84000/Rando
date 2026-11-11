@@ -86,7 +86,7 @@ fun AddScreen(
             error = null
             needsBrowser = false
             try {
-                onImported(fr.tidus.rando.explore.SmartImport.import(text, hidden) { progressMsg = it })
+                onImported(fr.tidus.rando.explore.SmartImport.import(text, hidden, null) { progressMsg = it })
             } catch (e: ImportException) {
                 error = e.message
                 needsBrowser = e.needsBrowser

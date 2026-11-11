@@ -34,6 +34,20 @@ private const val JSON_HOOK = """
 })();
 """
 
+/** Fait défiler la page pour déclencher le chargement des cartes et contenus « paresseux ». */
+private const val SCROLL_JS = """
+(function(){
+  var y = 0, n = 0;
+  var t = setInterval(function(){
+    y += 700; window.scrollTo(0, y); n++;
+    document.querySelectorAll('.leaflet-container, .mapboxgl-map, .maplibregl-map, [class*="map" i]').forEach(function(m){
+      try { m.scrollIntoView(); } catch(e){}
+    });
+    if (n > 12) { clearInterval(t); window.scrollTo(0, 0); }
+  }, 350);
+})();
+"""
+
 data class Collected(val texts: List<String>, val blocked: Boolean, val finalUrl: String?)
 
 /**
@@ -62,6 +76,7 @@ class HiddenBrowser {
                 sink?.add(t)
                 lastActivity = System.currentTimeMillis()
             }
+
         }, "RandoHidden")
         w.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
@@ -70,6 +85,7 @@ class HiddenBrowser {
 
             override fun onPageFinished(view: WebView, url: String?) {
                 view.evaluateJavascript(JSON_HOOK, null)
+                view.evaluateJavascript(SCROLL_JS, null)
                 lastActivity = System.currentTimeMillis()
             }
 

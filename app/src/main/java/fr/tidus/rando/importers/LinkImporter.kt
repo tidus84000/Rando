@@ -204,7 +204,7 @@ object PageScraper {
     }
 
     private val polyRegex = Regex(
-        """\\?"(?:polyline|encodedPolyline|encoded_polyline|points|line|polylinePoints)\\?"\s*:\s*\\?"((?:[^"\\]|\\.){40,})\\?""""
+        """\\?"(?:polyline|encodedPolyline|encoded_polyline|points|line|polylinePoints|pointsData|points_data|encodedPath|encoded_path|geometry)\\?"\s*:\s*\\?"((?:[^"\\]|\\.){40,})\\?""""
     )
 
     fun polylines(html: String): List<TrackPoint> {
@@ -269,6 +269,48 @@ object PageScraper {
             if (d > maxStep) maxStep = d
         }
         return total in 0.3..300.0 && maxStep < 5.0
+    }
+
+    /** Polylines dans les URL d'images de carte (Mapbox « path-…(…) », Google « path=enc:… »). */
+    fun staticMapPolylines(html: String): List<TrackPoint> {
+        var best = emptyList<TrackPoint>()
+        val encs = ArrayList<String>()
+        Regex("""path-[^()/]*\(([^)]{40,})\)""").findAll(html).forEach { encs.add(it.groupValues[1]) }
+        Regex("""path=[^"'&]*enc:([^"'&|]{40,})""").findAll(html).forEach { encs.add(it.groupValues[1]) }
+        for (raw in encs) {
+            val enc = runCatching { java.net.URLDecoder.decode(raw.replace("&amp;", "&"), "UTF-8") }.getOrDefault(raw)
+            for (precision in listOf(5, 6)) {
+                val pts = runCatching { decodePolyline(enc, precision) }.getOrNull() ?: continue
+                if (pts.size > best.size && plausible(pts)) best = pts
+            }
+        }
+        return best
+    }
+
+    private val jsPair = Regex("""\[\s*(-?\d{1,3}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})(?:\s*,\s*-?\d+(?:\.\d+)?)?\s*]""")
+
+    /** Tableaux JavaScript de paires [a, b] ; l'ordre lat/lon est choisi grâce au point de repère. */
+    fun jsPairs(text: String, hint: Pair<Double, Double>?): List<TrackPoint> {
+        var bestRun = emptyList<Pair<Double, Double>>()
+        var cur = ArrayList<Pair<Double, Double>>()
+        var lastEnd = -10
+        for (m in jsPair.findAll(text)) {
+            if (m.range.first - lastEnd > 3) {
+                if (cur.size > bestRun.size) bestRun = cur
+                cur = ArrayList()
+            }
+            cur.add(m.groupValues[1].toDouble() to m.groupValues[2].toDouble())
+            lastEnd = m.range.last
+        }
+        if (cur.size > bestRun.size) bestRun = cur
+        if (bestRun.size < 20) return emptyList()
+        val (a, b) = bestRun.first()
+        val latFirst = if (hint != null) {
+            fr.tidus.rando.data.Geo.haversineKm(a, b, hint.first, hint.second) <=
+                fr.tidus.rando.data.Geo.haversineKm(b, a, hint.first, hint.second)
+        } else !(b in 41.0..52.0 && a in -6.0..10.0)
+        val pts = bestRun.map { (x, y) -> if (latFirst) TrackPoint(x, y, null) else TrackPoint(y, x, null) }
+        return if (plausible(pts)) pts else emptyList()
     }
 
     fun title(html: String): String? {

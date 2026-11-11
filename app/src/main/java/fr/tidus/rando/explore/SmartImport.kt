@@ -1,9 +1,9 @@
 package fr.tidus.rando.explore
 
 import fr.tidus.rando.data.Hike
+import fr.tidus.rando.data.TrackPoint
 import fr.tidus.rando.importers.ElevationService
 import fr.tidus.rando.importers.GpxParser
-import fr.tidus.rando.importers.Http
 import fr.tidus.rando.importers.ImportException
 import fr.tidus.rando.importers.LinkImporter
 import fr.tidus.rando.importers.PageScraper
@@ -12,14 +12,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Import « intelligent » d'un lien de rando :
- * 1) import direct (API Komoot, GPX Visorando…) ;
- * 2) sinon la page est ouverte dans le navigateur invisible, et le tracé est repris des
- *    données que la carte du site télécharge (aucun clic, les fenêtres d'inscription ne gênent pas) ;
- * 3) sinon, on suit les liens de téléchargement GPX (pages intermédiaires comprises).
+ * Import d'un lien de rando :
+ * 1) import direct (API publique Komoot, GPX public) ;
+ * 2) sinon la page est ouverte en arrière-plan et le tracé est repris de ce que la page affiche
+ *    (carte, données de la page) ;
+ * 3) sinon : la fiche s'ouvre dans le navigateur intégré, où tu télécharges le GPX toi-même
+ *    (avec ton compte si le site l'exige) et l'appli le récupère.
  */
 object SmartImport {
-    suspend fun import(input: String, hidden: HiddenBrowser?, progress: (String) -> Unit = {}): Hike {
+    suspend fun import(
+        input: String,
+        hidden: HiddenBrowser?,
+        hint: Pair<Double, Double>? = null,
+        progress: (String) -> Unit = {},
+    ): Hike {
         val url = LinkImporter.extractUrl(input) ?: throw ImportException("Aucun lien trouvé.")
         val source = when {
             "komoot" in url || "kmt.io" in url -> "Komoot"
@@ -39,57 +45,36 @@ object SmartImport {
             }
         }
 
-        // 2) navigateur invisible
+        // 2) tracé affiché par la page
         var blocked = false
-        var pageHtml: String? = null
+        val texts = ArrayList<String>()
+        var where = hint
         if (hidden != null) {
-            progress("Ouverture de la page en arrière-plan…")
-            val got = hidden.collect(url, maxMs = 20_000, quietMs = 4_000)
+            progress("Lecture de la page en arrière-plan…")
+            val got = hidden.collect(url, maxMs = 22_000, quietMs = 4_500)
             blocked = got.blocked
-            pageHtml = got.texts.lastOrNull()
+            texts.addAll(got.texts)
+            val pageHtml = got.texts.lastOrNull()
+            if (where == null) where = pageHtml?.let { TrackExtractor.startFromText(it) }
             val gpx = got.texts.firstOrNull { GpxParser.looksLikeGpx(it) }
             val pts = if (gpx != null) runCatching { GpxParser.parse(gpx).points }.getOrDefault(emptyList())
-            else withContext(Dispatchers.Default) { TrackExtractor.best(got.texts) }
+            else withContext(Dispatchers.Default) { TrackExtractor.best(got.texts, where) }
             if (pts.size >= 20) {
                 val name = pageHtml?.let { PageScraper.title(it) }?.let { cleanTitle(it) } ?: "Rando $source"
-                return withContext(Dispatchers.IO) {
-                    ElevationService.fillMissing(LinkImporter.newHike(name, source, url, pts))
-                }
+                return withContext(Dispatchers.IO) { ElevationService.fillMissing(LinkImporter.newHike(name, source, url, pts)) }
             }
         }
-
-        // 3) liens de téléchargement (Visorando : page « le téléchargement va démarrer »)
-        val html = pageHtml ?: withContext(Dispatchers.IO) { Http.getText(url, "text/html") }
-        if (html != null) {
-            progress("Recherche du fichier GPX…")
-            val hike = withContext(Dispatchers.IO) { followDownloads(html, url, source, depth = 0, seen = HashSet()) }
-            if (hike != null) return hike
-        }
+        Diagnostics.record(url, texts, "Import auto raté ($source), vérification anti-robot=$blocked, repère=$where")
 
         throw ImportException(
-            if (blocked) "$source demande une vérification anti-robot. Ouvre la fiche, passe la vérification puis réessaie."
-            else "Tracé introuvable automatiquement. Ouvre la fiche dans le navigateur pour l'importer.",
+            when (source) {
+                "AllTrails" -> "AllTrails ne donne pas le tracé librement : le téléchargement GPX est réservé aux abonnés AllTrails+. " +
+                    "Touche « Voir la fiche » puis le bouton ⬇ (connecté à ton compte), ou importe un fichier GPX."
+                "Visorando" -> "Touche « Voir la fiche », connecte-toi à ton compte Visorando puis touche « GPX » : l'appli récupère le fichier."
+                else -> "Tracé introuvable automatiquement. Ouvre la fiche pour télécharger le GPX."
+            },
             needsBrowser = true,
         )
-    }
-
-    private fun followDownloads(html: String, base: String, source: String, depth: Int, seen: MutableSet<String>): Hike? {
-        if (depth > 2) return null
-        for (link in TrackExtractor.downloadLinks(html, base)) {
-            if (!seen.add(link)) continue
-            val text = Http.getText(link, "application/gpx+xml, application/xml, text/html, */*", base) ?: continue
-            if (GpxParser.looksLikeGpx(text)) {
-                val name = PageScraper.title(html)?.let { cleanTitle(it) } ?: "Rando $source"
-                return ElevationService.fillMissing(LinkImporter.fromGpxText(text, source, base, name))
-            }
-            val kml = TrackExtractor.kml(text)
-            if (TrackExtractor.plausible(kml)) {
-                val name = PageScraper.title(html)?.let { cleanTitle(it) } ?: "Rando $source"
-                return ElevationService.fillMissing(LinkImporter.newHike(name, source, base, kml))
-            }
-            if (text.contains("<html", true)) followDownloads(text, link, source, depth + 1, seen)?.let { return it }
-        }
-        return null
     }
 
     fun cleanTitle(t: String): String = t
@@ -99,4 +84,7 @@ object SmartImport {
         .replace(Regex("""^Téléchargement du (?:PDF|GPX) de\s*"?"""), "")
         .trim('"', ' ')
         .ifBlank { "Rando" }
+
+    @Suppress("unused")
+    private fun unused(p: List<TrackPoint>) = p
 }

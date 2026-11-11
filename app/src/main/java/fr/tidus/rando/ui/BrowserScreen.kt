@@ -176,6 +176,8 @@ fun BrowserScreen(
     hidden: fr.tidus.rando.explore.HiddenBrowser? = null,
 ) {
     val captured = remember { java.util.Collections.synchronizedList(ArrayList<String>()) }
+    val fetched = remember { java.util.Collections.synchronizedList(ArrayList<String>()) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     val log = remember { mutableStateListOf<String>() }
@@ -238,6 +240,7 @@ fun BrowserScreen(
                 addLog("GPX trouvé ($why)")
                 importGpxText(text!!, pageUrl ?: currentUrl)
             } else if (text != null && text.contains("<html", true)) {
+                if (fetched.size < 15) fetched.add("--- GET $candidate\n" + text.take(300_000))
                 // page intermédiaire (« le téléchargement va démarrer… ») : on suit ses liens
                 val next = fr.tidus.rando.importers.TrackExtractor.downloadLinks(text, candidate)
                 addLog("Page intermédiaire, ${next.size} lien(s) à suivre")
@@ -283,7 +286,7 @@ fun BrowserScreen(
                     return@launch
                 }
                 try {
-                    val hike = fr.tidus.rando.explore.SmartImport.import(pageUrl, hidden) { if (!silent) status = it }
+                    val hike = fr.tidus.rando.explore.SmartImport.import(pageUrl, hidden, null) { if (!silent) status = it }
                     if (!done) {
                         done = true
                         onImported(hike)
@@ -314,6 +317,19 @@ fun BrowserScreen(
                     }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Retour") }
                 },
                 actions = {
+                    IconButton(onClick = {
+                        val w = webView
+                        if (w == null) return@IconButton
+                        w.evaluateJavascript("document.documentElement.outerHTML") { res ->
+                            val html = runCatching { JSONTokener(res).nextValue() as? String }.getOrNull().orEmpty()
+                            fr.tidus.rando.explore.Diagnostics.record(
+                                w.url ?: url,
+                                ArrayList(fetched) + ArrayList(captured) + html,
+                                "Navigateur. Journal : " + log.joinToString(" | "),
+                            )
+                            fr.tidus.rando.explore.Diagnostics.share(ctx)
+                        }
+                    }) { Text("📤") }
                     androidx.compose.material3.TextButton(onClick = {
                         webView?.evaluateJavascript(UNBLOCK_JS) { n -> addLog("Fenêtres retirées : $n") }
                     }) { Text("🧹 Débloquer") }
