@@ -29,8 +29,19 @@ object WebViewCookieJar : CookieJar {
 }
 
 object Http {
-    const val UA =
-        "Mozilla/5.0 (Linux; Android 14; SM-S937B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"
+    /**
+     * Identité du navigateur : celle du Chrome du téléphone, sans la mention « wv » (vue intégrée),
+     * pour que les sites affichent la même page que dans un navigateur normal.
+     */
+    @Volatile var UA: String =
+        "Mozilla/5.0 (Linux; Android 15; SM-S937B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
+
+    fun initUserAgent(context: android.content.Context) {
+        runCatching {
+            val def = android.webkit.WebSettings.getDefaultUserAgent(context)
+            UA = def.replace("; wv)", ")").replace(Regex("""Version/[\d.]+ """), "")
+        }
+    }
 
     val client: OkHttpClient = OkHttpClient.Builder()
         .cookieJar(WebViewCookieJar)

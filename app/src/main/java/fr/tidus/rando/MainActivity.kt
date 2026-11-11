@@ -21,6 +21,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         Configuration.getInstance().load(this, getSharedPreferences("osmdroid", MODE_PRIVATE))
         Configuration.getInstance().userAgentValue = packageName
+        fr.tidus.rando.importers.Http.initUserAgent(this)
         val store = HikeStore(this)
         if (savedInstanceState == null) handleIntent(intent)
         setContent {

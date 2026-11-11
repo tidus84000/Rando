@@ -330,6 +330,13 @@ fun BrowserScreen(
                             fr.tidus.rando.explore.Diagnostics.share(ctx)
                         }
                     }) { Text("📤") }
+                    IconButton(onClick = {
+                        runCatching {
+                            ctx.startActivity(
+                                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(webView?.url ?: url))
+                            )
+                        }
+                    }) { Text("🌐") }
                     androidx.compose.material3.TextButton(onClick = {
                         webView?.evaluateJavascript(UNBLOCK_JS) { n -> addLog("Fenêtres retirées : $n") }
                     }) { Text("🧹 Débloquer") }
@@ -439,6 +446,16 @@ fun BrowserScreen(
 
                                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                                     val u = request.url.toString()
+                                    // liens « ouvrir dans l'appli » (intent://, alltrails://…) : on reste dans la page web
+                                    if (!u.startsWith("http")) {
+                                        val fallback = runCatching {
+                                            android.content.Intent.parseUri(u, android.content.Intent.URI_INTENT_SCHEME)
+                                                .getStringExtra("browser_fallback_url")
+                                        }.getOrNull()
+                                        if (fallback != null && fallback.startsWith("http")) view.loadUrl(fallback)
+                                        else addLog("Lien vers une appli ignoré")
+                                        return true
+                                    }
                                     if (mentionsGpx(u)) {
                                         tryUrl(u, view.url, "navigation")
                                         return true
