@@ -41,7 +41,9 @@ object LinkImporter {
 
     fun fromGpxText(text: String, source: String, url: String?, fallbackName: String): Hike {
         val parsed = GpxParser.parse(text)
-        return newHike(parsed.name ?: fallbackName, source, url, parsed.points)
+        val detected = GpxParser.detectSource(text)
+        val src = if (source == "GPX" && detected != null) detected.first else source
+        return newHike(parsed.name ?: fallbackName, src, url ?: detected?.second, parsed.points)
     }
 }
 

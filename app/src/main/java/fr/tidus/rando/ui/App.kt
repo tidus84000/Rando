@@ -214,7 +214,25 @@ suspend fun importUri(context: Context, uri: Uri): Hike = withContext(Dispatcher
     val text = context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
         ?: throw Exception("Impossible de lire le fichier")
     val parsed = GpxParser.parse(text)
-    ElevationService.fillMissing(LinkImporter.newHike(parsed.name ?: name, "GPX", null, parsed.points))
+    // provenance : d'abord l'en-tête du fichier, sinon la fiche ouverte récemment avec 🌐
+    var source = "GPX"
+    var url: String? = null
+    GpxParser.detectSource(text)?.let { (s, l) -> source = s; url = l }
+    val prefs = context.getSharedPreferences("rando", Context.MODE_PRIVATE)
+    val extUrl = prefs.getString("external_url", null)
+    val extAt = prefs.getLong("external_at", 0)
+    if (extUrl != null && System.currentTimeMillis() - extAt < 60 * 60 * 1000) {
+        val extSource = when {
+            "alltrails" in extUrl -> "AllTrails"
+            "komoot" in extUrl -> "Komoot"
+            "visorando" in extUrl -> "Visorando"
+            else -> null
+        }
+        if (source == "GPX" && extSource != null) source = extSource
+        if (url == null && extSource == source) url = extUrl
+        prefs.edit().remove("external_url").apply()
+    }
+    ElevationService.fillMissing(LinkImporter.newHike(parsed.name ?: name, source, url, parsed.points))
 }
 
 @Composable

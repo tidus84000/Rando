@@ -214,7 +214,7 @@ fun BrowserScreen(
             try {
                 val hike = withContext(Dispatchers.IO) {
                     val parsed = GpxParser.parse(gpx)
-                    val src = sourceOf(pageUrl)
+                    val src = sourceOf(pageUrl).let { if (it == "GPX") GpxParser.detectSource(gpx)?.first ?: it else it }
                     ElevationService.fillMissing(
                         LinkImporter.newHike(parsed.name ?: pageName() ?: "Rando $src", src, pageUrl ?: url, parsed.points)
                     )
@@ -331,10 +331,14 @@ fun BrowserScreen(
                         }
                     }) { Text("📤") }
                     IconButton(onClick = {
+                        val target = webView?.url ?: url
+                        // mémorise la fiche : le GPX téléchargé ensuite sera rattaché à ce site
+                        ctx.getSharedPreferences("rando", android.content.Context.MODE_PRIVATE).edit()
+                            .putString("external_url", target)
+                            .putLong("external_at", System.currentTimeMillis())
+                            .apply()
                         runCatching {
-                            ctx.startActivity(
-                                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(webView?.url ?: url))
-                            )
+                            ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(target)))
                         }
                     }) { Text("🌐") }
                     androidx.compose.material3.TextButton(onClick = {

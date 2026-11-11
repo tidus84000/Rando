@@ -10,6 +10,21 @@ data class ParsedTrack(val name: String?, val points: List<TrackPoint>)
 
 /** Lecture des fichiers GPX (traces trk, routes rte, ou à défaut points wpt). */
 object GpxParser {
+    /** Site d'origine d'un GPX, d'après son en-tête (creator, liens, métadonnées). */
+    fun detectSource(text: String): Pair<String, String?>? {
+        val head = text.take(6000)
+        val src = when {
+            head.contains("alltrails", true) -> "AllTrails"
+            head.contains("komoot", true) -> "Komoot"
+            head.contains("visorando", true) -> "Visorando"
+            else -> return null
+        }
+        val link = Regex("""<link[^>]+href=["']([^"']+)["']""", RegexOption.IGNORE_CASE).findAll(head)
+            .map { it.groupValues[1] }
+            .firstOrNull { it.contains(src, true) && it.startsWith("http") }
+        return src to link
+    }
+
     fun looksLikeGpx(text: String?): Boolean =
         text != null && text.contains("<gpx", ignoreCase = true)
 
