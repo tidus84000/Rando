@@ -556,6 +556,7 @@ private fun ExploreMap(
         update = { m ->
             val src = MapStyles.source(style, dark)
             if (m.tileProvider.tileSource.name() != src.name()) m.setTileSource(src)
+            MapStyles.applyDarkFilter(m, style, dark)
             state.recenter?.let { (p, z) ->
                 m.controller.setZoom(z)
                 m.controller.animateTo(p)

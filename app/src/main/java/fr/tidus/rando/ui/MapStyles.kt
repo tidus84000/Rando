@@ -11,44 +11,62 @@ import org.osmdroid.util.MapTileIndex
 enum class MapStyle(val label: String) { MODERN("Moderne"), TOPO("Topo"), SATELLITE("Satellite") }
 
 object MapStyles {
-    private val voyager = XYTileSource(
-        "CartoVoyager", 0, 20, 256, "@2x.png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
-            "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
-            "https://c.basemaps.cartocdn.com/rastertiles/voyager/",
-        ),
-        "© OpenStreetMap, © CARTO",
-    )
-    private val darkMatter = XYTileSource(
-        "CartoDark", 0, 20, 256, "@2x.png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/dark_all/",
-            "https://b.basemaps.cartocdn.com/dark_all/",
-            "https://c.basemaps.cartocdn.com/dark_all/",
-        ),
-        "© OpenStreetMap, © CARTO",
-    )
+    /** Services de tuiles Esri (sans clé) : l'ordre des tuiles est z/y/x. */
+    private fun esri(name: String, service: String, maxZoom: Int, copyright: String) = object : OnlineTileSourceBase(
+        name, 0, maxZoom, 256, "",
+        arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/$service/MapServer/tile/"),
+        copyright,
+    ) {
+        override fun getTileURLString(index: Long): String =
+            baseUrl + MapTileIndex.getZoom(index) + "/" + MapTileIndex.getY(index) + "/" + MapTileIndex.getX(index)
+    }
+
+    private val street = esri("EsriStreet", "World_Street_Map", 19, "© Esri, HERE, Garmin, © OpenStreetMap")
+
     private val topo = XYTileSource(
         "OpenTopoMap", 0, 17, 256, ".png",
         arrayOf("https://a.tile.opentopomap.org/", "https://b.tile.opentopomap.org/", "https://c.tile.opentopomap.org/"),
         "© OpenTopoMap (CC-BY-SA), © OpenStreetMap",
     )
 
-    /** Esri World Imagery : l'ordre des tuiles est z/y/x. */
-    private val satellite = object : OnlineTileSourceBase(
-        "EsriImagery", 0, 19, 256, "",
-        arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/"),
-        "© Esri, Maxar, Earthstar Geographics",
-    ) {
-        override fun getTileURLString(index: Long): String =
-            baseUrl + MapTileIndex.getZoom(index) + "/" + MapTileIndex.getY(index) + "/" + MapTileIndex.getX(index)
-    }
+    private val satellite = esri("EsriImagery", "World_Imagery", 19, "© Esri, Maxar, Earthstar Geographics")
 
     fun source(style: MapStyle, dark: Boolean): OnlineTileSourceBase = when (style) {
-        MapStyle.MODERN -> if (dark) darkMatter else voyager
+        MapStyle.MODERN -> street
         MapStyle.TOPO -> topo
         MapStyle.SATELLITE -> satellite
+    }
+
+    /**
+     * En mode sombre, le fond « Moderne » est assombri sur le téléphone (inversion des couleurs
+     * puis désaturation) : pas besoin d'un service de tuiles sombres payant.
+     */
+    fun applyDarkFilter(map: org.osmdroid.views.MapView, style: MapStyle, dark: Boolean) {
+        val overlay = map.overlayManager.tilesOverlay
+        if (style == MapStyle.MODERN && dark) {
+            val invert = android.graphics.ColorMatrix(
+                floatArrayOf(
+                    -1f, 0f, 0f, 0f, 255f,
+                    0f, -1f, 0f, 0f, 255f,
+                    0f, 0f, -1f, 0f, 255f,
+                    0f, 0f, 0f, 1f, 0f,
+                )
+            )
+            val desat = android.graphics.ColorMatrix().apply { setSaturation(0.35f) }
+            val dim = android.graphics.ColorMatrix(
+                floatArrayOf(
+                    0.85f, 0f, 0f, 0f, 4f,
+                    0f, 0.88f, 0f, 0f, 8f,
+                    0f, 0f, 0.86f, 0f, 6f,
+                    0f, 0f, 0f, 1f, 0f,
+                )
+            )
+            invert.postConcat(desat)
+            invert.postConcat(dim)
+            overlay.setColorFilter(android.graphics.ColorMatrixColorFilter(invert))
+        } else {
+            overlay.setColorFilter(null)
+        }
     }
 
     fun load(context: Context): MapStyle =

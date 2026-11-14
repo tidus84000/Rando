@@ -517,6 +517,7 @@ private fun TrackMap(profile: Profile, weather: List<PointWeather>) {
         factory = { ctx ->
             MapView(ctx).apply {
                 setTileSource(MapStyles.source(style, dark))
+                MapStyles.applyDarkFilter(this, style, dark)
                 setMultiTouchControls(true)
                 zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
                 isTilesScaledToDpi = true
