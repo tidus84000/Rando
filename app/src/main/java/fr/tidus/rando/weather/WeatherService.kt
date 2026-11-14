@@ -22,6 +22,7 @@ class LocationForecast(
     val fromMeteoFrance: BooleanArray,
     val sunrise: Map<LocalDate, LocalDateTime>,
     val sunset: Map<LocalDate, LocalDateTime>,
+    val provider: String = "Open-Meteo",
 ) {
     fun indexOf(t: LocalDateTime): Int {
         val rounded = (if (t.minute >= 30) t.plusHours(1) else t).withMinute(0).withSecond(0).withNano(0)
@@ -54,8 +55,15 @@ object WeatherService {
                 val frList = a.getOrNull()
                 val bestList = b.getOrNull()
                 when {
-                    frList == null && bestList == null ->
-                        throw (b.exceptionOrNull() ?: a.exceptionOrNull() ?: Exception("Météo indisponible"))
+                    frList == null && bestList == null -> {
+                        // Open-Meteo refuse (clé exigée, quota…) : secours MET Norway, sans clé
+                        val why = (b.exceptionOrNull() ?: a.exceptionOrNull())?.message ?: "indisponible"
+                        try {
+                            MetNorway.fetch(points, start, end)
+                        } catch (e: Exception) {
+                            throw Exception("Open-Meteo : $why — MET Norway : ${e.message}")
+                        }
+                    }
                     frList == null -> bestList!!.map { it.toForecast(false) }
                     bestList == null -> frList.map { it.toForecast(true) }
                     else -> frList.indices.map { merge(frList[it], bestList.getOrNull(it)) }

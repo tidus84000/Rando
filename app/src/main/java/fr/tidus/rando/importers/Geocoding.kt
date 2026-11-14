@@ -15,7 +15,7 @@ data class Place(val label: String, val city: String?, val lat: Double, val lon:
 object Geocoding {
     private fun call(url: String): JSONObject? = runCatching {
         Http.plain.newCall(Request.Builder().url(url).header("User-Agent", "Rando-Android").build())
-            .execute().use { if (it.isSuccessful) JSONObject(it.body!!.string()) else null }
+            .execute().use { if (it.isSuccessful) JSONObject(it.body!!.string()).takeIf { o -> o.has("features") } else null }
     }.getOrNull()
 
     suspend fun search(query: String): List<Place> = withContext(Dispatchers.IO) {
@@ -24,12 +24,49 @@ object Geocoding {
             .addQueryParameter("limit", "6")
             .addQueryParameter("lang", "fr")
             .build().toString()
-        parse(call(url))
+        val photon = call(url)
+        if (photon != null) parse(photon) else nominatimSearch(query)
     }
 
     suspend fun reverse(lat: Double, lon: Double): Place? = withContext(Dispatchers.IO) {
         val url = String.format(Locale.US, "https://photon.komoot.io/reverse?lat=%.6f&lon=%.6f&lang=fr", lat, lon)
-        parse(call(url)).firstOrNull()
+        val photon = call(url)
+        if (photon != null) parse(photon).firstOrNull() else nominatimReverse(lat, lon)
+    }
+
+    // ---------- Secours : Nominatim (OpenStreetMap), sans clé ----------
+    private const val NOMINATIM_UA = "Rando-Android/0.9 github.com/tidus84000/Rando"
+
+    private fun nominatim(url: String): String? = runCatching {
+        Http.plain.newCall(Request.Builder().url(url).header("User-Agent", NOMINATIM_UA).build())
+            .execute().use { if (it.isSuccessful) it.body!!.string() else null }
+    }.getOrNull()
+
+    private fun nominatimPlace(o: JSONObject): Place? {
+        val lat = o.optString("lat").toDoubleOrNull() ?: return null
+        val lon = o.optString("lon").toDoubleOrNull() ?: return null
+        val a = o.optJSONObject("address")
+        val city = a?.let { ad ->
+            listOf("city", "town", "village", "municipality").firstNotNullOfOrNull { k -> ad.optString(k).takeIf { it.isNotBlank() } }
+        }
+        val label = o.optString("display_name").split(", ").take(3).joinToString(", ").ifBlank { city ?: "Lieu" }
+        return Place(label, city, lat, lon)
+    }
+
+    private fun nominatimSearch(q: String): List<Place> {
+        val url = "https://nominatim.openstreetmap.org/search".toHttpUrl().newBuilder()
+            .addQueryParameter("q", q).addQueryParameter("format", "jsonv2")
+            .addQueryParameter("limit", "6").addQueryParameter("addressdetails", "1")
+            .addQueryParameter("accept-language", "fr").build().toString()
+        val body = nominatim(url) ?: return emptyList()
+        val arr = runCatching { org.json.JSONArray(body) }.getOrNull() ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { nominatimPlace(arr.getJSONObject(it)) }
+    }
+
+    private fun nominatimReverse(lat: Double, lon: Double): Place? {
+        val url = String.format(Locale.US, "https://nominatim.openstreetmap.org/reverse?lat=%.6f&lon=%.6f&format=jsonv2&addressdetails=1&accept-language=fr", lat, lon)
+        val body = nominatim(url) ?: return null
+        return runCatching { nominatimPlace(JSONObject(body)) }.getOrNull()
     }
 
     private fun parse(o: JSONObject?): List<Place> {

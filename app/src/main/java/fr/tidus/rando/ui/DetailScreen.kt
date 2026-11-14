@@ -312,9 +312,12 @@ fun DetailScreen(hike: Hike, onBack: () -> Unit, onDelete: () -> Unit, onRename:
                 }
                 item {
                     val fr = r.points.count { it.meteoFrance }
+                    val provider = forecasts?.firstOrNull()?.provider ?: "Open-Meteo"
                     Text(
-                        (if (fr > 0) "Modèle Météo-France AROME 1,3 km / ARPEGE" else "Modèles globaux (échéance lointaine, moins précis)") +
-                            " via Open-Meteo, corrigé selon l'altitude de chaque point. Heures de passage estimées (DIN 33466).",
+                        (if (provider != "Open-Meteo") "Prévisions MET Norway (service de secours, sans clé)"
+                        else if (fr > 0) "Modèle Météo-France AROME 1,3 km / ARPEGE via Open-Meteo"
+                        else "Modèles globaux via Open-Meteo (échéance lointaine, moins précis)") +
+                            ", corrigé selon l'altitude de chaque point. Heures de passage estimées (DIN 33466).",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 20.dp),
