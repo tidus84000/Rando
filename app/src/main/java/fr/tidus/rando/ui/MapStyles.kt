@@ -9,7 +9,7 @@ import org.osmdroid.util.MapTileIndex
 
 /** Fonds de carte : moderne (clair / sombre), topographique, satellite. */
 enum class MapStyle(val label: String) {
-    MODERN("Moderne"), PLAN_IGN("Plan IGN"), TOPO("Topo"), PHOTO_IGN("Photo IGN"), SATELLITE("Satellite")
+    MODERN("Moderne"), IGN_CLASSIQUE("IGN Classique"), PLAN_IGN("Plan IGN"), TOPO("Topo"), PHOTO_IGN("Photo IGN"), SATELLITE("Satellite")
 }
 
 object MapStyles {
@@ -53,7 +53,7 @@ object MapStyles {
 
     fun source(style: MapStyle, dark: Boolean): OnlineTileSourceBase = when (style) {
         MapStyle.MODERN -> street
-        MapStyle.PLAN_IGN -> planIgn
+        MapStyle.PLAN_IGN, MapStyle.IGN_CLASSIQUE -> planIgn
         MapStyle.PHOTO_IGN -> photoIgn
         MapStyle.TOPO -> topo
         MapStyle.SATELLITE -> satellite
@@ -91,7 +91,24 @@ object MapStyles {
         }
     }
 
-    fun load(context: Context): MapStyle =
+    /** Moteur de carte : « nouveau » (MapLibre) ou « classique » (osmdroid), pour pouvoir revenir en arrière. */
+    fun useMapLibre(context: Context): Boolean =
+        context.getSharedPreferences("rando", Context.MODE_PRIVATE).getString("map_engine", "maplibre") == "maplibre"
+
+    fun setMapLibre(context: Context, on: Boolean) {
+        context.getSharedPreferences("rando", Context.MODE_PRIVATE).edit()
+            .putString("map_engine", if (on) "maplibre" else "osmdroid").apply()
+    }
+
+    fun load(context: Context): MapStyle {
+        val prefs = context.getSharedPreferences("rando", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("classique_default_set", false)) {
+            prefs.edit().putBoolean("classique_default_set", true).putString("map_style", MapStyle.IGN_CLASSIQUE.name).apply()
+        }
+        return loadRaw(context)
+    }
+
+    private fun loadRaw(context: Context): MapStyle =
         runCatching { MapStyle.valueOf(context.getSharedPreferences("rando", Context.MODE_PRIVATE).getString("map_style", "MODERN")!!) }
             .getOrDefault(MapStyle.MODERN)
 

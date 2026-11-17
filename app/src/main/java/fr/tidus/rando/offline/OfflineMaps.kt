@@ -28,7 +28,14 @@ import kotlin.math.ln
 import kotlin.math.tan
 
 /** État du téléchargement d'une rando : tuiles faites / total, et si c'est terminé. */
-data class OfflineState(val done: Int, val total: Int, val failed: Int, val finished: Boolean) {
+data class OfflineState(
+    val done: Int,
+    val total: Int,
+    val failed: Int,
+    val finished: Boolean,
+    /** Carte IGN Classique (nouveau moteur) : null = pas encore, true = prête, false = échec. */
+    val ml: Boolean? = null,
+) {
     val complete get() = finished && total > 0 && failed * 20 < total
 }
 
@@ -53,18 +60,19 @@ object OfflineMaps {
         val raw = prefs(context).getString(hikeId, null) ?: return null
         val p = raw.split('/')
         if (p.size < 3) return null
-        return OfflineState(p[0].toInt(), p[1].toInt(), p[2].toInt(), true)
+        val ml = prefs(context).getString("ml:$hikeId", null)?.let { it == "1" }
+        return OfflineState(p[0].toInt(), p[1].toInt(), p[2].toInt(), true, ml)
     }
 
     fun start(context: Context, hike: Hike) {
         val app = context.applicationContext
         val current = _states.value[hike.id]
-        if (current != null && !current.finished) return
+        if (current != null && (!current.finished || current.ml == null)) return
         scope.launch { download(app, hike) }
     }
 
     fun forget(context: Context, hikeId: String) {
-        prefs(context).edit().remove(hikeId).apply()
+        prefs(context).edit().remove(hikeId).remove("ml:$hikeId").apply()
         _states.value = _states.value - hikeId
     }
 
@@ -109,6 +117,13 @@ object OfflineMaps {
         }
         publish(true)
         prefs(context).edit().putString(hike.id, "${done.get()}/$total/${failed.get()}").apply()
+
+        // carte IGN Classique pour le nouveau moteur
+        val ok = runCatching {
+            fr.tidus.rando.ui.ml.MlOffline.download(context, hike.points, hike.id) { _, _ -> }
+        }.getOrDefault(false)
+        prefs(context).edit().putString("ml:${hike.id}", if (ok) "1" else "0").apply()
+        _states.value = _states.value + (hike.id to OfflineState(done.get(), total, failed.get(), true, ok))
     }
 
     /** Tuiles couvrant le tracé : rectangle complet aux petits zooms, couloir autour du tracé ensuite. */

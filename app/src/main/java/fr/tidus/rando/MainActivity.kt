@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
         Configuration.getInstance().tileFileSystemCacheTrimBytes = 2560L * 1024 * 1024
         Configuration.getInstance().expirationOverrideDuration = 365L * 24 * 3600 * 1000
         fr.tidus.rando.importers.Http.initUserAgent(this)
+        org.maplibre.android.MapLibre.getInstance(this)
         val store = HikeStore(this)
         if (savedInstanceState == null) handleIntent(intent)
         setContent {

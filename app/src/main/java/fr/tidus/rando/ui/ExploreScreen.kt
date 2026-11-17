@@ -132,6 +132,8 @@ fun ExploreScreen(
     var importing by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var mapRef by remember { mutableStateOf<MapView?>(null) }
+    var useMl by remember { mutableStateOf(MapStyles.useMapLibre(context)) }
+    var areaProvider by remember { mutableStateOf<(() -> Pair<GeoPoint, Double>?)?>(null) }
 
     fun search(center: GeoPoint, radiusKm: Double) {
         state.searchCenter = center
@@ -143,6 +145,11 @@ fun ExploreScreen(
     }
 
     fun searchVisibleArea() {
+        if (useMl) {
+            val (c, half) = areaProvider?.invoke() ?: return
+            search(c, half.coerceIn(2.0, 40.0))
+            return
+        }
         val map = mapRef ?: return
         val box = map.boundingBox
         val c = map.mapCenter
@@ -204,15 +211,27 @@ fun ExploreScreen(
     Box(Modifier.fillMaxSize()) {
         DisposableEffect(Unit) { onDispose { state.running = emptySet() } }
 
-        ExploreMap(
-            state = state,
-            style = style,
-            dark = dark,
-            savedHikes = savedHikes,
-            onMap = { mapRef = it },
-            onSelect = { state.selected = it },
-            onOpenHike = onOpenHike,
-        )
+        if (useMl) {
+            fr.tidus.rando.ui.ml.MlExploreMap(
+                state = state,
+                style = style,
+                dark = dark,
+                savedHikes = savedHikes,
+                onArea = { areaProvider = it },
+                onSelect = { state.selected = it },
+                onOpenHike = onOpenHike,
+            )
+        } else {
+            ExploreMap(
+                state = state,
+                style = if (style == MapStyle.IGN_CLASSIQUE) MapStyle.PLAN_IGN else style,
+                dark = dark,
+                savedHikes = savedHikes,
+                onMap = { mapRef = it },
+                onSelect = { state.selected = it },
+                onOpenHike = onOpenHike,
+            )
+        }
 
         // ---------- Haut : barre de recherche flottante + sites ----------
         Column(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 8.dp, start = 12.dp, end = 12.dp)) {
@@ -352,7 +371,7 @@ fun ExploreScreen(
                     if (showStyles) {
                         Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceContainer, shadowElevation = 6.dp) {
                             Column(Modifier.padding(6.dp)) {
-                                MapStyle.entries.forEach { s ->
+                                MapStyle.entries.filter { useMl || it != MapStyle.IGN_CLASSIQUE }.forEach { s ->
                                     Row(
                                         Modifier.clip(RoundedCornerShape(12.dp))
                                             .background(if (s == style) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
@@ -362,6 +381,24 @@ fun ExploreScreen(
                                                 showStyles = false
                                             }.padding(horizontal = 14.dp, vertical = 10.dp),
                                     ) { Text(s.label, style = MaterialTheme.typography.labelLarge) }
+                                }
+                                Box(Modifier.padding(horizontal = 8.dp, vertical = 6.dp).fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                                Text(
+                                    "Moteur de carte",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+                                )
+                                listOf(true to "Nouveau", false to "Classique").forEach { (ml, label) ->
+                                    Row(
+                                        Modifier.clip(RoundedCornerShape(12.dp))
+                                            .background(if (ml == useMl) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                                            .clickable {
+                                                useMl = ml
+                                                MapStyles.setMapLibre(context, ml)
+                                                showStyles = false
+                                            }.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    ) { Text(label, style = MaterialTheme.typography.labelLarge) }
                                 }
                             }
                         }

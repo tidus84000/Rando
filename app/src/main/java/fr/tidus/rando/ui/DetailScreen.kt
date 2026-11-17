@@ -172,7 +172,17 @@ fun DetailScreen(hike: Hike, onBack: () -> Unit, onDelete: () -> Unit, onRename:
             // ---------- Carte en tête ----------
             item {
                 Box(Modifier.fillMaxWidth().height(330.dp)) {
-                    TrackMap(profile, route?.points.orEmpty(), forceIgn = offline?.complete == true)
+                    if (MapStyles.useMapLibre(context)) {
+                        val dk = MaterialTheme.colorScheme.background.luminance() < 0.3f
+                        val chosen = remember { MapStyles.load(context) }
+                        fr.tidus.rando.ui.ml.MlTrackMap(
+                            profile, route?.points.orEmpty(),
+                            style = if (offline?.ml == true) MapStyle.IGN_CLASSIQUE else chosen,
+                            dark = dk,
+                        )
+                    } else {
+                        TrackMap(profile, route?.points.orEmpty(), forceIgn = offline?.complete == true)
+                    }
                     Box(
                         Modifier.fillMaxWidth().height(110.dp).background(
                             androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.35f), Color.Transparent)),
@@ -776,11 +786,15 @@ private fun OfflineRow(state: fr.tidus.rando.offline.OfflineState?, onDownload: 
                             modifier = Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(50)),
                         )
                     }
-                    state.complete -> Text("Disponible sans réseau · ${state.total} tuiles (≈ ${state.total * 25 / 1024 + 1} Mo)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    state.complete && state.ml == null -> Text("Plan IGN prêt · préparation de l'IGN Classique…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    state.complete -> Text(
+                        "Disponible sans réseau · Plan IGN" + if (state.ml == true) " + IGN Classique" else "",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary,
+                    )
                     else -> Text("Incomplète (${state.failed} tuiles manquantes)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                 }
             }
-            if (state == null || (state.finished && !state.complete)) {
+            if (state == null || (state.finished && (!state.complete || state.ml == false))) {
                 TextButton(onClick = onDownload) { Text(if (state == null) "Télécharger" else "Réessayer") }
             }
         }
