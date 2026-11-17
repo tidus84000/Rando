@@ -21,6 +21,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         Configuration.getInstance().load(this, getSharedPreferences("osmdroid", MODE_PRIVATE))
         Configuration.getInstance().userAgentValue = packageName
+        // cartes hors ligne : grand cache, tuiles gardées un an sans re-téléchargement
+        Configuration.getInstance().tileFileSystemCacheMaxBytes = 3L * 1024 * 1024 * 1024
+        Configuration.getInstance().tileFileSystemCacheTrimBytes = 2560L * 1024 * 1024
+        Configuration.getInstance().expirationOverrideDuration = 365L * 24 * 3600 * 1000
         fr.tidus.rando.importers.Http.initUserAgent(this)
         val store = HikeStore(this)
         if (savedInstanceState == null) handleIntent(intent)

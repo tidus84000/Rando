@@ -51,6 +51,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -131,6 +132,9 @@ fun DetailScreen(hike: Hike, onBack: () -> Unit, onDelete: () -> Unit, onRename:
     var confirmDelete by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var startAddress by remember { mutableStateOf<String?>(null) }
+    val liveOffline by fr.tidus.rando.offline.OfflineMaps.states.collectAsState()
+    val savedOffline = remember(hike.id) { fr.tidus.rando.offline.OfflineMaps.saved(context, hike.id) }
+    val offline = liveOffline[hike.id] ?: savedOffline
     LaunchedEffect(hike.id) {
         hike.points.firstOrNull()?.let { p -> startAddress = Geocoding.reverse(p.lat, p.lon)?.label }
     }
@@ -168,7 +172,7 @@ fun DetailScreen(hike: Hike, onBack: () -> Unit, onDelete: () -> Unit, onRename:
             // ---------- Carte en tête ----------
             item {
                 Box(Modifier.fillMaxWidth().height(330.dp)) {
-                    TrackMap(profile, route?.points.orEmpty())
+                    TrackMap(profile, route?.points.orEmpty(), forceIgn = offline?.complete == true)
                     Box(
                         Modifier.fillMaxWidth().height(110.dp).background(
                             androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.35f), Color.Transparent)),
@@ -225,6 +229,8 @@ fun DetailScreen(hike: Hike, onBack: () -> Unit, onDelete: () -> Unit, onRename:
                         Spacer(Modifier.width(10.dp))
                         Text("Y aller en voiture", style = MaterialTheme.typography.labelLarge)
                     }
+                    Spacer(Modifier.height(10.dp))
+                    OfflineRow(offline) { fr.tidus.rando.offline.OfflineMaps.start(context, hike) }
                 }
             }
             // ---------- Profil ----------
@@ -505,10 +511,11 @@ private val OpenTopo = XYTileSource(
 
 @SuppressLint("ClickableViewAccessibility")
 @Composable
-private fun TrackMap(profile: Profile, weather: List<PointWeather>) {
+private fun TrackMap(profile: Profile, weather: List<PointWeather>, forceIgn: Boolean = false) {
     val ctx = LocalContext.current
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.3f
-    val style = remember { MapStyles.load(ctx) }
+    // carte IGN téléchargée : on l'affiche (elle marche sans réseau)
+    val style = remember(forceIgn) { if (forceIgn) MapStyle.PLAN_IGN else MapStyles.load(ctx) }
     val geo = remember(profile) { (0 until profile.size).map { GeoPoint(profile.lat[it], profile.lon[it]) } }
     var mapRef by remember { mutableStateOf<MapView?>(null) }
     DisposableEffect(Unit) { onDispose { mapRef?.onDetach() } }
@@ -532,6 +539,11 @@ private fun TrackMap(profile: Profile, weather: List<PointWeather>) {
             }
         },
         update = { map ->
+            val wanted = MapStyles.source(style, dark)
+            if (map.tileProvider.tileSource.name() != wanted.name()) {
+                map.setTileSource(wanted)
+                MapStyles.applyDarkFilter(map, style, dark)
+            }
             map.overlays.clear()
             if (geo.size >= 2) {
                 map.overlays.add(Polyline(map).apply {
@@ -743,5 +755,34 @@ private fun SunPill(label: String, time: String, icon: androidx.compose.ui.graph
         Icon(icon, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.tertiary)
         Spacer(Modifier.width(8.dp))
         Text("$label $time", style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+
+@Composable
+private fun OfflineRow(state: fr.tidus.rando.offline.OfflineState?, onDownload: () -> Unit) {
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(RandoIcons.Map, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Carte IGN hors ligne", style = MaterialTheme.typography.labelLarge)
+                when {
+                    state == null -> Text("Pas encore téléchargée", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    !state.finished -> {
+                        Text("Téléchargement… ${state.done}/${state.total} tuiles", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        LinearProgressIndicator(
+                            progress = { if (state.total == 0) 0f else state.done.toFloat() / state.total },
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(50)),
+                        )
+                    }
+                    state.complete -> Text("Disponible sans réseau · ${state.total} tuiles (≈ ${state.total * 25 / 1024 + 1} Mo)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    else -> Text("Incomplète (${state.failed} tuiles manquantes)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                }
+            }
+            if (state == null || (state.finished && !state.complete)) {
+                TextButton(onClick = onDownload) { Text(if (state == null) "Télécharger" else "Réessayer") }
+            }
+        }
     }
 }

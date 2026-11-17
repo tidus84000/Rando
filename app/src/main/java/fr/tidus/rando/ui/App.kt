@@ -94,6 +94,7 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
 
     fun saved(h: Hike) {
         store.save(h)
+        fr.tidus.rando.offline.OfflineMaps.start(context, h)
         version++
         screen = Screen.Detail(h.id)
     }
@@ -207,6 +208,7 @@ fun RandoApp(store: HikeStore, pending: Pending?, onPendingConsumed: () -> Unit)
                         onBack = { screen = Screen.Home },
                         onDelete = {
                             store.delete(hike.id)
+                            fr.tidus.rando.offline.OfflineMaps.forget(context, hike.id)
                             version++
                             screen = Screen.Home
                         },

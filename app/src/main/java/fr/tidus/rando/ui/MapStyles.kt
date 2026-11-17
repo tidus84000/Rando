@@ -8,7 +8,9 @@ import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.MapTileIndex
 
 /** Fonds de carte : moderne (clair / sombre), topographique, satellite. */
-enum class MapStyle(val label: String) { MODERN("Moderne"), TOPO("Topo"), SATELLITE("Satellite") }
+enum class MapStyle(val label: String) {
+    MODERN("Moderne"), PLAN_IGN("Plan IGN"), TOPO("Topo"), PHOTO_IGN("Photo IGN"), SATELLITE("Satellite")
+}
 
 object MapStyles {
     /** Services de tuiles Esri (sans clé) : l'ordre des tuiles est z/y/x. */
@@ -29,10 +31,30 @@ object MapStyles {
         "© OpenTopoMap (CC-BY-SA), © OpenStreetMap",
     )
 
+    /** Géoplateforme IGN (data.geopf.fr), WMTS en Web Mercator, libre et sans clé. */
+    private fun ign(name: String, layer: String, format: String, maxZoom: Int) = object : OnlineTileSourceBase(
+        name, 0, maxZoom, 256, "",
+        arrayOf("https://data.geopf.fr/wmts"),
+        "© IGN – Géoplateforme",
+    ) {
+        override fun getTileURLString(index: Long): String =
+            baseUrl + "?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=" + layer +
+                "&STYLE=normal&TILEMATRIXSET=PM&FORMAT=" + format +
+                "&TILEMATRIX=" + MapTileIndex.getZoom(index) +
+                "&TILEROW=" + MapTileIndex.getY(index) +
+                "&TILECOL=" + MapTileIndex.getX(index)
+    }
+
+    /** Plan IGN : fond utilisé pour les cartes hors ligne des randos. */
+    val planIgn: OnlineTileSourceBase = ign("PlanIGNv2", "GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2", "image/png", 19)
+    private val photoIgn = ign("PhotoIGN", "ORTHOIMAGERY.ORTHOPHOTOS", "image/jpeg", 19)
+
     private val satellite = esri("EsriImagery", "World_Imagery", 19, "© Esri, Maxar, Earthstar Geographics")
 
     fun source(style: MapStyle, dark: Boolean): OnlineTileSourceBase = when (style) {
         MapStyle.MODERN -> street
+        MapStyle.PLAN_IGN -> planIgn
+        MapStyle.PHOTO_IGN -> photoIgn
         MapStyle.TOPO -> topo
         MapStyle.SATELLITE -> satellite
     }
